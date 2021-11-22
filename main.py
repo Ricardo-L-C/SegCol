@@ -10,7 +10,7 @@ from tag2pix import tag2pix
 root_path = Path(__file__).resolve().parent
 dataset_path = root_path / "dataset"
 tag_dump_path = root_path / "loader" / "tag_dump.pkl"
-pretrain_path = root_path / "model.pkl"
+pretrain_path = root_path / "model.pth"
 
 def parse_args():
     desc = "tag2pix: Line Art Colorization using Text Tag"

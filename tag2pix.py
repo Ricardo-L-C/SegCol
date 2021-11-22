@@ -1,3 +1,4 @@
+from builtins import type
 import itertools, time, pickle, pprint
 from pathlib import Path
 
@@ -138,7 +139,7 @@ class tag2pix(object):
         self.train_hist['total_time'] = []
 
         self.y_real_, self.y_fake_ = torch.ones(self.batch_size, 1), torch.zeros(self.batch_size, 1)
-        
+
         if self.gpu_mode:
             self.y_real_, self.y_fake_ = self.y_real_.to(self.device), self.y_fake_.to(self.device)
 
@@ -166,12 +167,13 @@ class tag2pix(object):
 
             max_iter = self.train_data_loader.dataset.__len__() // self.batch_size
 
-            for iter, (original_, sketch_, iv_tag_, cv_tag_) in enumerate(tqdm(self.train_data_loader, ncols=80)):
+            for iter, (original_, sketch_, iv_tag_, cv_tag_, link_) in enumerate(tqdm(self.train_data_loader, ncols=80)):
                 if iter >= max_iter:
                     break
 
                 if self.gpu_mode:
-                    sketch_, original_, iv_tag_, cv_tag_ = sketch_.to(self.device), original_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device)
+                    sketch_, original_, iv_tag_, cv_tag_, link_ = \
+                        sketch_.to(self.device), original_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device), link_.to(self.device)
 
                 # update D network
                 self.D_optimizer.zero_grad()
@@ -184,21 +186,23 @@ class tag2pix(object):
                 D_real, CIT_real, CVT_real = self.D(original_)
                 D_real_loss = self.BCE_loss(D_real, self.y_real_)
 
-                G_f, _ = self.G(sketch_, feature_tensor, cv_tag_)
+                G_f, _ = self.G(sketch_, feature_tensor, cv_tag_, link_)
                 if self.gpu_mode:
                     G_f = G_f.to(self.device)
 
                 D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
                 D_f_fake_loss = self.BCE_loss(D_f_fake, self.y_fake_)
 
+                cv_and_link = torch.cat((cv_tag_, link_), 1)
+
                 if self.two_step_epoch == 0 or epoch >= self.two_step_epoch:
                     CIT_real_loss = self.BCE_loss(CIT_real, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_real_loss = self.BCE_loss(CVT_real, cv_tag_)
+                    CVT_real_loss = self.BCE_loss(CVT_real, cv_and_link)
 
                     C_real_loss = self.cvt_weight * CVT_real_loss + self.cit_weight * CIT_real_loss
 
                     CIT_f_fake_loss = self.BCE_loss(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_f_fake_loss = self.BCE_loss(CVT_f_fake, cv_tag_)
+                    CVT_f_fake_loss = self.BCE_loss(CVT_f_fake, cv_and_link)
 
                     C_f_fake_loss = self.cvt_weight * CVT_f_fake_loss + self.cit_weight * CIT_f_fake_loss
                 else:
@@ -215,7 +219,7 @@ class tag2pix(object):
                 # update G network
                 self.G_optimizer.zero_grad()
 
-                G_f, G_g = self.G(sketch_, feature_tensor, cv_tag_)
+                G_f, G_g = self.G(sketch_, feature_tensor, cv_tag_, link_)
 
                 if self.gpu_mode:
                     G_f, G_g = G_f.to(self.device), G_g.to(self.device)
@@ -226,7 +230,7 @@ class tag2pix(object):
 
                 if self.two_step_epoch == 0 or epoch >= self.two_step_epoch:
                     CIT_f_fake_loss = self.BCE_loss(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_f_fake_loss = self.BCE_loss(CVT_f_fake, cv_tag_)
+                    CVT_f_fake_loss = self.BCE_loss(CVT_f_fake, cv_and_link)
 
                     C_f_fake_loss = self.cvt_weight * CVT_f_fake_loss + self.cit_weight * CIT_f_fake_loss
                 else:
@@ -243,7 +247,10 @@ class tag2pix(object):
                 G_loss.backward()
                 self.G_optimizer.step()
 
-                if ((iter + 1) % 100) == 0:
+                if epoch == 1 and iter == 1:
+                    self.visualize_results(-1)
+
+                if ((iter + 1) % 500) == 0:
                     print("Epoch: [{:2d}] [{:4d}/{:4d}] D_loss: {:.8f}, G_loss: {:.8f}".format(
                         epoch, (iter + 1), max_iter, D_loss.item(), G_loss.item()))
 
@@ -251,7 +258,7 @@ class tag2pix(object):
 
             with torch.no_grad():
                 self.visualize_results(epoch)
-                utils.loss_plot(self.train_hist, self.result_path, epoch)
+                #utils.loss_plot(self.train_hist, self.result_path, epoch)
 
             if epoch >= self.save_all_epoch > 0:
                 self.save(epoch)
@@ -267,7 +274,7 @@ class tag2pix(object):
         self.train_hist['total_time'].append(time.time() - start_time)
         print("Avg one epoch time: {:.2f}, total {} epochs time: {:.2f}".format(
             np.mean(self.train_hist['per_epoch_time']), self.epoch, self.train_hist['total_time'][0]))
-        
+
 
     def test(self):
         self.load_test(self.args.load)
@@ -282,9 +289,9 @@ class tag2pix(object):
             result_path.mkdir()
 
         with torch.no_grad():
-            for sketch_, index_, _, cv_tag_ in tqdm(self.test_data_loader, ncols=80):
+            for sketch_, index_, _, cv_tag_, link_ in tqdm(self.test_data_loader, ncols=80):
                 if self.gpu_mode:
-                    sketch_, cv_tag_ = sketch_.to(self.device), cv_tag_.to(self.device)
+                    sketch_, cv_tag_, link_ = sketch_.to(self.device), cv_tag_.to(self.device), link_.to(self.device)
 
                 with torch.no_grad():
                     feature_tensor = self.Pretrain_ResNeXT(sketch_)
@@ -292,8 +299,7 @@ class tag2pix(object):
                 if self.gpu_mode:
                     feature_tensor = feature_tensor.to(self.device)
 
-                # D_real, CIT_real, CVT_real = self.D(original_)
-                G_f, _ = self.G(sketch_, feature_tensor, cv_tag_)
+                G_f, _ = self.G(sketch_, feature_tensor, cv_tag_, link_)
                 G_f = self.color_revert(G_f.cpu())
 
                 for ind, result in zip(index_.cpu().numpy(), G_f):
@@ -313,17 +319,18 @@ class tag2pix(object):
         self.G.eval()
 
         # test_data_loader
-        original_, sketch_, iv_tag_, cv_tag_ = self.test_images
+        original_, sketch_, iv_tag_, cv_tag_, link_ = self.test_images[0: 36]
         image_frame_dim = int(np.ceil(np.sqrt(len(original_))))
 
         # iv_tag_ to feature tensor 16 * 16 * 256 by pre-reained Sketch.
         with torch.no_grad():
             feature_tensor = self.Pretrain_ResNeXT(sketch_)
-            
-            if self.gpu_mode:
-                original_, sketch_, iv_tag_, cv_tag_, feature_tensor = original_.to(self.device), sketch_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device), feature_tensor.to(self.device)
 
-            G_f, G_g = self.G(sketch_, feature_tensor, cv_tag_)
+            if self.gpu_mode:
+                original_, sketch_, iv_tag_, cv_tag_, feature_tensor, link_ = \
+                    original_.to(self.device), sketch_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device), feature_tensor.to(self.device), link_.to(self.device)
+
+            G_f, G_g = self.G(sketch_, feature_tensor, cv_tag_, link_)
 
             if self.gpu_mode:
                 G_f = G_f.cpu()
@@ -343,7 +350,7 @@ class tag2pix(object):
 
         with (self.result_path / 'arguments.txt').open('w') as f:
             f.write(pprint.pformat(self.args.__dict__))
-        
+
         save_dir = self.result_path
 
         torch.save({
@@ -383,12 +390,13 @@ class tag2pix(object):
 
     def get_test_data(self, test_data_loader, count):
         test_count = 0
-        original_, sketch_, iv_tag_, cv_tag_ = [], [], [], []
-        for orig, sket, ivt, cvt in test_data_loader:
+        original_, sketch_, iv_tag_, cv_tag_, link_ = [], [], [], [], []
+        for orig, sket, ivt, cvt, link in test_data_loader:
             original_.append(orig)
             sketch_.append(sket)
             iv_tag_.append(ivt)
             cv_tag_.append(cvt)
+            link_.append(link)
 
             test_count += len(orig)
             if test_count >= count:
@@ -398,7 +406,8 @@ class tag2pix(object):
         sketch_ = torch.cat(sketch_, 0)
         iv_tag_ = torch.cat(iv_tag_, 0)
         cv_tag_ = torch.cat(cv_tag_, 0)
-        
+        link_ = torch.cat(link_, 0)
+
         self.save_tag_tensor_name(iv_tag_, cv_tag_, self.result_path / "test_image_tags.txt")
 
         image_frame_dim = int(np.ceil(np.sqrt(len(original_))))
@@ -413,11 +422,11 @@ class tag2pix(object):
         utils.save_images(sketch_np[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim],
                         self.result_path / 'tag2pix_sketch.png')
 
-        return original_, sketch_, iv_tag_, cv_tag_
+        return original_, sketch_, iv_tag_, cv_tag_, link_
 
 
     def save_tag_tensor_name(self, iv_tensor, cv_tensor, save_file_path):
-        '''iv_tensor, cv_tensor: batched one-hot tag tensors'''     
+        '''iv_tensor, cv_tensor: batched one-hot tag tensors'''
         iv_dict_inverse = {tag_index: tag_id for (tag_id, tag_index) in self.iv_dict.items()}
         cv_dict_inverse = {tag_index: tag_id for (tag_id, tag_index) in self.cv_dict.items()}
 

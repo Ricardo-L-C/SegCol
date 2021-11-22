@@ -107,14 +107,14 @@ class FeatureConv(nn.Module):
         self.output_size = output_size
 
         no_bn = not net_opt['bn']
-        
+
         if input_size == output_size * 4:
             stride1, stride2 = 2, 2
         elif input_size == output_size * 2:
             stride1, stride2 = 2, 1
         else:
             stride1, stride2 = 1, 1
-        
+
         seq = []
         seq.append(nn.Conv2d(input_dim, output_dim, kernel_size=3, stride=stride1, padding=1, bias=False))
         if not no_bn: seq.append(nn.BatchNorm2d(output_dim))
@@ -139,10 +139,10 @@ class DecoderBlock(nn.Module):
     def forward(self, x, cat_feature):
         out = self.secat_layer(x, cat_feature)
         return self.ps(out)
-        
+
 
 class Generator(nn.Module):
-    def __init__(self, input_size, cv_class_num, iv_class_num, input_dim=1, output_dim=3, 
+    def __init__(self, input_size, cv_class_num, iv_class_num, input_dim=1, output_dim=3,
                  layers=[12, 8, 5, 5], net_opt=DEFAULT_NET_OPT):
         super(Generator, self).__init__()
         self.input_dim = input_dim
@@ -150,29 +150,31 @@ class Generator(nn.Module):
         self.cv_class_num = cv_class_num
         self.iv_class_num = iv_class_num
 
+        self.link_num = 23 * 19
+
         self.input_size = input_size
         self.layers = layers
 
         self.cardinality = 16
 
         self.bottom_h = self.input_size // 16
-        self.Linear = nn.Linear(cv_class_num, self.bottom_h*self.bottom_h*32)
+        self.Linear = nn.Linear(cv_class_num + self.link_num, self.bottom_h*self.bottom_h*32)
 
         self.color_fc_out = 64
         self.net_opt = net_opt
 
         no_bn = not net_opt['bn']
-        
+
         if net_opt['relu']:
             self.colorFC = nn.Sequential(
-                nn.Linear(cv_class_num, self.color_fc_out), nn.ReLU(inplace=True),
+                nn.Linear(cv_class_num + self.link_num, self.color_fc_out), nn.ReLU(inplace=True),
                 nn.Linear(self.color_fc_out, self.color_fc_out), nn.ReLU(inplace=True),
                 nn.Linear(self.color_fc_out, self.color_fc_out), nn.ReLU(inplace=True),
                 nn.Linear(self.color_fc_out, self.color_fc_out)
             )
         else:
             self.colorFC = nn.Sequential(
-                nn.Linear(cv_class_num, self.color_fc_out),
+                nn.Linear(cv_class_num + self.link_num, self.color_fc_out),
                 nn.Linear(self.color_fc_out, self.color_fc_out),
                 nn.Linear(self.color_fc_out, self.color_fc_out),
                 nn.Linear(self.color_fc_out, self.color_fc_out)
@@ -183,7 +185,7 @@ class Generator(nn.Module):
         self.conv3 = self._make_encoder_block(32, 64)
         self.conv4 = self._make_encoder_block(64, 128)
         self.conv5 = self._make_encoder_block(128, 256)
-        
+
         bottom_layer_len = 256 + 64 + (256 if net_opt['cit'] else 0)
 
         self.deconv1 = DecoderBlock(bottom_layer_len, 4*256, self.color_fc_out, self.layers[0], no_bn=no_bn)
@@ -230,7 +232,7 @@ class Generator(nn.Module):
                 nn.init.kaiming_normal_(m.weight)
             if hasattr(m, 'bias') and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-    
+
     def _make_encoder_block(self, inplanes, planes):
         return nn.Sequential(
             nn.Conv2d(inplanes, planes, 3, 2, 1),
@@ -246,8 +248,8 @@ class Generator(nn.Module):
             nn.Conv2d(planes, planes, 3, 1, 1),
             nn.LeakyReLU(0.2),
         )
-        
-    def forward(self, input, feature_tensor, c_tag_class):
+
+    def forward(self, input, feature_tensor, c_tag_class, link):
         out1 = self.conv1(input)
         out2 = self.conv2(out1)
         out3 = self.conv3(out2)
@@ -257,6 +259,9 @@ class Generator(nn.Module):
         # ==============================
         # it's about color variant tag set
         # temporally, don't think about noise z
+
+        c_tag_class = torch.cat((c_tag_class, link), 1)
+
         c_tag_tensor = self.Linear(c_tag_class)
         c_tag_tensor = c_tag_tensor.view(-1, 32, self.bottom_h, self.bottom_h)
         c_tag_tensor = self.colorConv(c_tag_tensor)
@@ -304,7 +309,7 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
         self.input_dim = input_dim
         self.input_size = input_size
-        self.cv_class_num = cv_class_num
+        self.cv_class_num = cv_class_num + 23 * 19
         self.iv_class_num = iv_class_num
         self.cardinality = 16
 
@@ -376,7 +381,7 @@ class Discriminator(nn.Module):
         out = self.conv8(out)
         out = self.avgpool(out)
         out = out.view(out.size(0), -1)
-	
+
         cit_judge = self.cit_judge(out)
         cvt_judge = self.cvt_judge(out)
         adv_judge = self.adv_judge(out)

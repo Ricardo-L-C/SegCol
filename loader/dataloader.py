@@ -1,4 +1,4 @@
-import pickle, random 
+import pickle, random
 import math, time, platform
 from pathlib import Path
 
@@ -7,6 +7,7 @@ import torch
 import numpy as np
 from PIL import Image
 from skimage import color
+from torch import tensor
 
 from torchvision import transforms, datasets
 from torchvision.transforms import functional as tvF
@@ -41,9 +42,15 @@ def get_tag_dict(tag_dump_path):
 
     iv_dict = {tag_id: i for (i, tag_id) in enumerate(iv_tag_list)}
     cv_dict = {tag_id: i for (i, tag_id) in enumerate(cv_tag_list)}
+
     id_to_name = {tag_id: tag_name for (tag_name, tag_id) in name_to_id.items()}
 
     return (iv_dict, cv_dict, id_to_name)
+
+
+colors = ['black', 'white', 'red', 'blue', 'pink', 'green', 'brown', 'grey', 'yellow', 'purple', 'orange', 'silver', 'aqua', 'gradient', 'shiny', 'pale', 'lavender', 'lightbrown', 'dark', 'beige', 'black-framed', 'red-framed', 'blonde']
+parts = ['hair', 'background', 'eyes', 'skirt', 'legwear', 'bow', 'dress', 'ribbon', 'shirt', 'skin', 'footwear', 'neckwear', 'bikini', 'bra', 'gloves', 'panties', 'eyewear', 'hat', 'jacket']
+link_map = {"613194": 4, "613209": 23, "613197": 118, "613195": 61, "613208": 42, "613207": 175, "613200": 137, "613205": 80, "659098": 10, "1303252": 124, "1288957": 29, "683385": 48, "1293269": 67, "374791": 34, "16718": 15, "374628": 3, "428173": 60, "503552": 41, "515302": 98, "520398": 22, "520397": 79, "613885": 117, "616524": 136, "498950": 193, "376766": 27, "524961": 8, "390594": 46, "397327": 65, "514515": 84, "474820": 14, "486611": 128, "435433": 52, "1401711": 49, "1441865": 11, "1403814": 68, "1402579": 106, "1441874": 163, "547860": 18, "471601": 13, "463127": 32, "456585": 89, "14620": 25, "39127": 6, "377140": 63, "389777": 44, "166531": 82, "390596": 177, "166757": 101, "390401": 45, "401289": 159, "474500": 7, "498000": 64, "477288": 26, "520991": 83, "71730": 351, "494744": 275, "446647": 294, "391297": 28, "378561": 66, "426936": 31, "374620": 12, "460324": 50, "10959": 59, "8526": 40, "16578": 116, "10960": 97, "15654": 173, "89189": 154, "16750": 78, "13199": 2, "89368": 230, "95405": 192, "89228": 135, "390186": 211, "1373022": 415, "1373029": 396, "87788": 418, "16867": 114, "13200": 0, "10953": 57, "16442": 171, "11429": 76, "15425": 209, "8388": 95, "5403": 38, "16581": 19, "87676": 190, "16580": 133, "94007": 228, "403081": 304, "468534": 323, "476134": 17, "538901": 36, "470807": 43, "546609": 62, "701697": 24, "563256": 157, "463115": 81, "1247160": 5, "615165": 100, "515193": 20, "632214": 134, "580545": 58, "584749": 77, "531371": 248, "593298": 153, "569748": 1, "593297": 96, "593296": 39, "646879": 115, "643898": 172, "645753": 191, "684986": 362}
 
 def read_tagline_txt(tag_txt_path, img_dir_path, iv_dict, cv_dict, data_size=0, is_train=True, seed=-1):
     iv_class_len = len(iv_dict)
@@ -58,6 +65,8 @@ def read_tagline_txt(tag_txt_path, img_dir_path, iv_dict, cv_dict, data_size=0, 
     iv_class_list = []
     cv_class_list = []
     file_id_list = []
+
+    link_list = []
 
     data_limited = data_size != 0
     count = 0
@@ -103,6 +112,9 @@ def read_tagline_txt(tag_txt_path, img_dir_path, iv_dict, cv_dict, data_size=0, 
 
         iv_class = torch.zeros(iv_class_len, dtype=torch.float)
         cv_class = torch.zeros(cv_class_len, dtype=torch.float)
+
+        link_class = torch.zeros(23*19, dtype=torch.float)
+
         tag_exist = False
 
         for tag in tag_list:
@@ -125,6 +137,10 @@ def read_tagline_txt(tag_txt_path, img_dir_path, iv_dict, cv_dict, data_size=0, 
                     cv_class[cv_dict[tag]] = 1
                     tag_exist = True
                     cv_tag_num += 1
+
+                    if tag != 219401 and tag != 3389:
+                        link_class[link_map[str(tag)]] = 1
+
                 except IndexError as e:
                     print(len(cv_dict), cv_class_len, tag, cv_dict[tag])
                     raise e
@@ -135,6 +151,7 @@ def read_tagline_txt(tag_txt_path, img_dir_path, iv_dict, cv_dict, data_size=0, 
         file_id_list.append(file_name)
         iv_class_list.append(iv_class)
         cv_class_list.append(cv_class)
+        link_list.append(link_class)
 
         all_tag_num += len(tag_list)
         count += 1
@@ -142,12 +159,12 @@ def read_tagline_txt(tag_txt_path, img_dir_path, iv_dict, cv_dict, data_size=0, 
             break
 
     print(f'count_all {count_all}, select_count {count}, awful_count {awful_tag_num}, all_tag_num {all_tag_num}, iv_tag_num {iv_tag_num}, cv_tag_num {cv_tag_num}')
-    return (file_id_list, iv_class_list, cv_class_list)
+    return (file_id_list, iv_class_list, cv_class_list, link_list)
 
 
 class ColorAndSketchDataset(Dataset):
-    def __init__(self, rgb_path, sketch_path_list, file_id_list, iv_class_list, cv_class_list,
-            override_len=None, both_transform=None, sketch_transform=None, color_transform=None, seed=-1, **kwargs):
+    def __init__(self, rgb_path, sketch_path_list, file_id_list, iv_class_list, cv_class_list, link_list,
+            override_len=None, both_transform=None, sketch_transform=None, color_transform=None, seed=-1, link=False, **kwargs):
 
         self.rgb_path = rgb_path
         self.sketch_path_list = sketch_path_list
@@ -156,11 +173,14 @@ class ColorAndSketchDataset(Dataset):
 
         self.iv_class_list = iv_class_list
         self.cv_class_list = cv_class_list
+        self.link_list = link_list
 
         self.both_transform = both_transform
         self.color_transform = color_transform
         self.sketch_transform = sketch_transform
         self.data_len = len(file_id_list)
+
+        self.link = link
 
         if override_len > 0 and self.data_len > override_len:
             self.data_len = override_len
@@ -191,7 +211,11 @@ class ColorAndSketchDataset(Dataset):
         if self.sketch_transform is not None:
             sketch_img = self.sketch_transform(sketch_img)
 
-        return (color_img, sketch_img, iv_tag_class, cv_tag_class)
+        if self.link:
+            link_class = self.link_list[index]
+            return (color_img, sketch_img, iv_tag_class, cv_tag_class, link_class)
+        else:
+            return (color_img, sketch_img, iv_tag_class, cv_tag_class)
 
     def __len__(self):
         return self.data_len
@@ -315,10 +339,10 @@ def get_train_dataset(args):
     print('making train set...')
 
     rgb_train_path = data_dir_path / "rgb_train"
-    sketch_dir_path_list = ["keras_train", "simpl_train", "xdog_train"]
+    sketch_dir_path_list = ["keras_train", "xdog_train"] # "simpl_train"
     sketch_dir_path_list = [data_dir_path / p for p in sketch_dir_path_list if (data_dir_path / p).exists()]
 
-    (train_id_list, train_iv_class_list, train_cv_class_list) = read_tagline_txt(
+    (train_id_list, train_iv_class_list, train_cv_class_list, link_list) = read_tagline_txt(
         tag_path, rgb_train_path, iv_dict, cv_dict, data_size=data_size, is_train=True, seed=args.seed)
 
     if platform.system() == 'Windows':
@@ -327,11 +351,11 @@ def get_train_dataset(args):
         _init_fn = lambda worker_id: set_seed(args.seed, print_log=False)
 
     train = ColorAndSketchDataset(rgb_path=rgb_train_path, sketch_path_list=sketch_dir_path_list,
-        file_id_list=train_id_list, iv_class_list=train_iv_class_list, cv_class_list=train_cv_class_list,
-        override_len=data_size, both_transform=data_randomize,
+        file_id_list=train_id_list, iv_class_list=train_iv_class_list, cv_class_list=train_cv_class_list, link_list=link_list,
+        override_len=data_size, both_transform=None, #data_randomize,
         sketch_transform=transforms.Compose(random_jitter + data_augmentation),
         color_transform=transforms.Compose(data_augmentation + swap_color_space),
-        seed=args.seed)
+        seed=args.seed, link=args.link_color)
 
     train_loader = DataLoader(train, batch_size=batch_size, shuffle=True, num_workers=args.thread, worker_init_fn=_init_fn)
 
@@ -345,14 +369,15 @@ def get_train_dataset(args):
     rgb_test_path = data_dir_path / "benchmark"
     sketch_test_path = data_dir_path / "keras_test"
 
-    (test_id_list, test_iv_class_list, test_cv_class_list) = read_tagline_txt(
+    (test_id_list, test_iv_class_list, test_cv_class_list, link_list) = read_tagline_txt(
         tag_path, rgb_test_path, iv_dict, cv_dict, is_train=False, data_size=args.test_image_count)
 
     test = ColorAndSketchDataset(rgb_path=rgb_test_path, sketch_path_list=[sketch_test_path],
-        file_id_list=test_id_list, iv_class_list=test_iv_class_list, cv_class_list=test_cv_class_list,
-        override_len=args.test_image_count, both_transform=data_randomize,
+        file_id_list=test_id_list, iv_class_list=test_iv_class_list, cv_class_list=test_cv_class_list, link_list=link_list,
+        override_len=args.test_image_count,
         sketch_transform=transforms.Compose(data_augmentation),
-        color_transform=transforms.Compose(data_augmentation + swap_color_space))
+        color_transform=transforms.Compose(data_augmentation + swap_color_space),
+        link=args.link_color)
 
     test_loader = DataLoader(test, batch_size=batch_size, shuffle=False, num_workers=args.thread, worker_init_fn=_init_fn)
 
@@ -414,13 +439,13 @@ def get_test_dataset(args):
     sketch_path = data_dir_path / args.test_dir
     tag_path = data_dir_path / args.tag_txt
 
-    (test_id_list, test_iv_class_list, test_cv_clas_list) = read_tagline_txt(
+    (test_id_list, test_iv_class_list, test_cv_clas_list, link_list) = read_tagline_txt(
         tag_path, sketch_path, iv_dict, cv_dict, is_train=False, data_size=data_size)
 
     print('making train set...')
 
-    test_dataset = LinerTestDataset(sketch_path=sketch_path, file_id_list=test_id_list, 
-        iv_class_list=test_iv_class_list, cv_class_list=test_cv_clas_list,
+    test_dataset = LinerTestDataset(sketch_path=sketch_path, file_id_list=test_id_list,
+        iv_class_list=test_iv_class_list, cv_class_list=test_cv_clas_list, link_list=link_list,
         override_len=data_size, sketch_transform=transforms.Compose(data_augmentation))
 
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.thread)
