@@ -250,7 +250,9 @@ class tag2pix(object):
                 if epoch == 1 and iter == 1:
                     self.visualize_results(-1)
 
-                if ((iter + 1) % 500) == 0:
+                if ((iter + 1) % 1000) == 0:
+                    with torch.no_grad():
+                        self.visualize_results(epoch)
                     print("Epoch: [{:2d}] [{:4d}/{:4d}] D_loss: {:.8f}, G_loss: {:.8f}".format(
                         epoch, (iter + 1), max_iter, D_loss.item(), G_loss.item()))
 

@@ -14,6 +14,8 @@ from torchvision.transforms import functional as tvF
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset  # For custom datasets
 
+from torchvision.transforms import InterpolationMode
+
 def set_seed(seed, print_log=True):
     if seed < 0:
         return
@@ -222,7 +224,7 @@ class ColorAndSketchDataset(Dataset):
 
     def enhance_brightness(self, input_size):
         random_jitter = [transforms.ColorJitter(brightness=[1, 7], contrast=0.2, saturation=0.2)]
-        data_augmentation = [transforms.Resize((input_size, input_size), interpolation=Image.LANCZOS),
+        data_augmentation = [transforms.Resize((input_size, input_size), interpolation=InterpolationMode.LANCZOS),
                             transforms.ToTensor()]
         self.sketch_transform = transforms.Compose(random_jitter + data_augmentation)
 
@@ -293,16 +295,16 @@ def rot_crop(x):
 class RandomFRC(transforms.RandomResizedCrop):
     """RandomHorizontalFlip + RandomRotation + RandomResizedCrop 2 images"""
     def __call__(self, img1, img2):
-        img1 = tvF.resize(img1, self.size, interpolation=Image.LANCZOS)
-        img2 = tvF.resize(img2, self.size, interpolation=Image.LANCZOS)
+        img1 = tvF.resize(img1, self.size, interpolation=InterpolationMode.LANCZOS)
+        img2 = tvF.resize(img2, self.size, interpolation=InterpolationMode.LANCZOS)
         if random.random() < 0.5:
             img1 = tvF.hflip(img1)
             img2 = tvF.hflip(img2)
         if random.random() < 0.5:
             rot = random.uniform(-10, 10)
             crop_ratio = rot_crop(rot)
-            img1 = tvF.rotate(img1, rot, resample=Image.BILINEAR)
-            img2 = tvF.rotate(img2, rot, resample=Image.BILINEAR)
+            img1 = tvF.rotate(img1, rot, resample=InterpolationMode.BILINEAR)
+            img2 = tvF.rotate(img2, rot, resample=InterpolationMode.BILINEAR)
             img1 = tvF.center_crop(img1, int(img1.size[0] * crop_ratio))
             img2 = tvF.center_crop(img2, int(img2.size[0] * crop_ratio))
 
@@ -320,11 +322,11 @@ def get_train_dataset(args):
     batch_size = args.batch_size
     input_size = args.input_size
 
-    data_randomize = RandomFRC(input_size, scale=(0.9, 1.0), ratio=(0.95, 1.05), interpolation=Image.LANCZOS)
+    data_randomize = RandomFRC(input_size, scale=(0.9, 1.0), ratio=(0.95, 1.05), interpolation=InterpolationMode.LANCZOS)
 
     swap_color_space = [RGB2ColorSpace(args.color_space)]
     random_jitter = [transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)]
-    data_augmentation = [transforms.Resize((input_size, input_size), interpolation=Image.LANCZOS),
+    data_augmentation = [transforms.Resize((input_size, input_size), interpolation=InterpolationMode.LANCZOS),
                         transforms.ToTensor()]
 
     iv_dict, cv_dict, id_to_name = get_tag_dict(args.tag_dump)
@@ -387,17 +389,20 @@ def get_train_dataset(args):
 
 
 class LinerTestDataset(Dataset):
-    def __init__(self, sketch_path, file_id_list, iv_class_list, cv_class_list,
-            override_len=None, sketch_transform=None, **kwargs):
+    def __init__(self, sketch_path, file_id_list, iv_class_list, cv_class_list, link_list,
+            override_len=None, sketch_transform=None, link=False, **kwargs):
         self.sketch_path = sketch_path
 
         self.file_id_list = file_id_list # copy
 
         self.iv_class_list = iv_class_list
         self.cv_class_list = cv_class_list
+        self.link_list = link_list
 
         self.sketch_transform = sketch_transform
         self.data_len = len(file_id_list)
+
+        self.link = link
 
         if override_len > 0 and self.data_len > override_len:
             self.data_len = override_len
@@ -414,7 +419,11 @@ class LinerTestDataset(Dataset):
         if self.sketch_transform is not None:
             sketch_img = self.sketch_transform(sketch_img)
 
-        return (sketch_img, file_id, iv_tag_class, cv_tag_class)
+        if self.link:
+            link_class = self.link_list[idx]
+            return (sketch_img, file_id, iv_tag_class, cv_tag_class, link_class)
+        else:
+            return (sketch_img, file_id, iv_tag_class, cv_tag_class)
 
     def __len__(self):
         return self.data_len
@@ -425,7 +434,7 @@ def get_test_dataset(args):
     batch_size = args.batch_size
     input_size = args.input_size
 
-    data_augmentation = [transforms.Resize((input_size, input_size), interpolation=Image.LANCZOS),
+    data_augmentation = [transforms.Resize((input_size, input_size), interpolation=InterpolationMode.LANCZOS),
                         transforms.ToTensor()]
 
     iv_dict, cv_dict, _ = get_tag_dict(args.tag_dump)
@@ -446,7 +455,8 @@ def get_test_dataset(args):
 
     test_dataset = LinerTestDataset(sketch_path=sketch_path, file_id_list=test_id_list,
         iv_class_list=test_iv_class_list, cv_class_list=test_cv_clas_list, link_list=link_list,
-        override_len=data_size, sketch_transform=transforms.Compose(data_augmentation))
+        override_len=data_size, sketch_transform=transforms.Compose(data_augmentation),
+        link=True)
 
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.thread)
 
