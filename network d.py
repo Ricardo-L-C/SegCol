@@ -1,10 +1,7 @@
+import utils
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-import math
-
-import numpy as np
 
 from model.se_resnet import BottleneckX, SEResNeXt
 from model.options import DEFAULT_NET_OPT
@@ -18,31 +15,30 @@ class MultiPrmSequential(nn.Sequential):
             input = module(input, cat_feature)
         return input
 
-def make_secat_layer(block, in_channels, out_channels, cat_channels, block_count, no_bn=False):
-    inner_channels = out_channels // 4
+def make_secat_layer(block, inplanes, planes, cat_planes, block_count, stride=1, no_bn=False):
+    outplanes = planes * block.expansion
     downsample = None
-    if in_channels != out_channels:
+    if stride != 1 or inplanes != planes * block.expansion:
         if no_bn:
-            downsample = nn.Sequential(nn.Conv2d(in_channels, out_channels, 1, 1, bias=False))
+            downsample = nn.Sequential(nn.Conv2d(inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False))
         else:
             downsample = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, 1, 1, bias=False),
-                nn.BatchNorm2d(out_channels)
-            )
+                nn.Conv2d(inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion))
 
     layers = []
-    layers.append(block(in_channels, inner_channels, cat_channels, 16, 1, downsample, no_bn=no_bn))
-    for _ in range(1, block_count):
-        layers.append(block(out_channels, inner_channels, cat_channels, 16, no_bn=no_bn))
+    layers.append(block(inplanes, planes, cat_planes, 16, stride, downsample, no_bn=no_bn))
+    for i in range(1, block_count):
+        layers.append(block(outplanes, planes, cat_planes, 16, no_bn=no_bn))
 
     return MultiPrmSequential(*layers)
 
 class SeCatLayer(nn.Module):
-    def __init__(self, channel, cat_channels, reduction=16):
+    def __init__(self, channel, cat_channel, reduction=16):
         super(SeCatLayer, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
-            nn.Linear(cat_channels + channel, channel // reduction, bias=False),
+            nn.Linear(cat_channel + channel, channel // reduction, bias=False),
             nn.ReLU(inplace=True),
             nn.Linear(channel // reduction, channel, bias=False),
             nn.Sigmoid()
@@ -59,19 +55,18 @@ class SeCatLayer(nn.Module):
 class SECatBottleneckX(nn.Module):
     expansion = 4
 
-    def __init__(self, in_channels, out_channels, cat_channels, cardinality=16, stride=1, downsample=None, no_bn=False):
+    def __init__(self, inplanes, planes, cat_channel, cardinality=16, stride=1, downsample=None, no_bn=False):
         super(SECatBottleneckX, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 1, bias=False)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, stride, 1, groups=cardinality, bias=False)
-        self.conv3 = nn.Conv2d(out_channels, out_channels * self.expansion, kernel_size=1, bias=False)
+        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
+        self.bn1 = None if no_bn else nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride,
+                               padding=1, groups=cardinality, bias=False)
+        self.bn2 = None if no_bn else nn.BatchNorm2d(planes)
 
-        self.bn1 = self.bn2 = self.bn3 = None
-        if not no_bn:
-            self.bn1 = nn.BatchNorm2d(out_channels)
-            self.bn2 = nn.BatchNorm2d(out_channels)
-            self.bn3 = nn.BatchNorm2d(out_channels * self.expansion)
+        self.conv3 = nn.Conv2d(planes, planes * self.expansion, kernel_size=1, bias=False)
+        self.bn3 = None if no_bn else nn.BatchNorm2d(planes * self.expansion)
 
-        self.se_layer = SeCatLayer(out_channels * self.expansion, cat_channels)
+        self.selayer = SeCatLayer(planes * self.expansion, cat_channel)
 
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
@@ -93,7 +88,7 @@ class SECatBottleneckX(nn.Module):
         if self.bn3 is not None:
             out = self.bn3(out)
 
-        out = self.se_layer(out, cat_feature)
+        out = self.selayer(out, cat_feature)
 
         if self.downsample is not None:
             residual = self.downsample(x)
@@ -106,6 +101,10 @@ class SECatBottleneckX(nn.Module):
 class FeatureConv(nn.Module):
     def __init__(self, input_dim=512, output_dim=256, input_size=32, output_size=16, net_opt=DEFAULT_NET_OPT):
         super(FeatureConv, self).__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.input_size = input_size
+        self.output_size = output_size
 
         no_bn = not net_opt['bn']
 
@@ -118,12 +117,10 @@ class FeatureConv(nn.Module):
 
         seq = []
         seq.append(nn.Conv2d(input_dim, output_dim, kernel_size=3, stride=stride1, padding=1, bias=False))
-        if not no_bn:
-            seq.append(nn.BatchNorm2d(output_dim))
+        if not no_bn: seq.append(nn.BatchNorm2d(output_dim))
         seq.append(nn.ReLU(inplace=True))
         seq.append(nn.Conv2d(output_dim, output_dim, kernel_size=3, stride=stride2, padding=1, bias=False))
-        if not no_bn:
-            seq.append(nn.BatchNorm2d(output_dim))
+        if not no_bn: seq.append(nn.BatchNorm2d(output_dim))
         seq.append(nn.ReLU(inplace=True))
         seq.append(nn.Conv2d(output_dim, output_dim, kernel_size=3, stride=1, padding=1, bias=False))
         seq.append(nn.ReLU(inplace=True))
@@ -134,127 +131,14 @@ class FeatureConv(nn.Module):
         return self.network(x)
 
 class DecoderBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, color_fc_out, block_num, no_bn):
+    def __init__(self, inplanes, planes, color_fc_out, block_num, no_bn):
         super(DecoderBlock, self).__init__()
-        self.secat_layer = make_secat_layer(SECatBottleneckX, in_channels, out_channels, color_fc_out, block_num, no_bn=no_bn)
+        self.secat_layer = make_secat_layer(SECatBottleneckX, inplanes, planes//4, color_fc_out, block_num, no_bn=no_bn)
         self.ps = nn.PixelShuffle(2)
 
     def forward(self, x, cat_feature):
         out = self.secat_layer(x, cat_feature)
         return self.ps(out)
-
-
-class MAB(nn.Module):
-    def __init__(self, dim_Q, dim_K, dim_V, num_heads, ln=False):
-        super(MAB, self).__init__()
-        self.dim_V = dim_V
-        self.num_heads = num_heads
-        self.fc_q = nn.Linear(dim_Q, dim_V)
-        self.fc_k = nn.Linear(dim_K, dim_V)
-        self.fc_v = nn.Linear(dim_K, dim_V)
-        if ln:
-            self.ln0 = nn.LayerNorm(dim_V)
-            self.ln1 = nn.LayerNorm(dim_V)
-        self.fc_o = nn.Linear(dim_V, dim_V)
-
-    def forward(self, Q, K):
-        Q = self.fc_q(Q)
-        K, V = self.fc_k(K), self.fc_v(K)
-
-        dim_split = self.dim_V // self.num_heads
-        Q_ = torch.cat(Q.split(dim_split, 2), 0)
-        K_ = torch.cat(K.split(dim_split, 2), 0)
-        V_ = torch.cat(V.split(dim_split, 2), 0)
-
-        A = torch.softmax(Q_.bmm(K_.transpose(1,2))/math.sqrt(self.dim_V), 2)
-        O = torch.cat((Q_ + A.bmm(V_)).split(Q.size(0), 0), 2)
-        O = O if getattr(self, 'ln0', None) is None else self.ln0(O)
-        O = O + F.relu(self.fc_o(O))
-        O = O if getattr(self, 'ln1', None) is None else self.ln1(O)
-        return O
-
-class SAB(nn.Module):
-    def __init__(self, dim_in, dim_out, num_heads, ln=False):
-        super(SAB, self).__init__()
-        self.mab = MAB(dim_in, dim_in, dim_out, num_heads, ln=ln)
-
-    def forward(self, X):
-        return self.mab(X, X)
-
-class ISAB(nn.Module):
-    def __init__(self, dim_in, dim_out, num_heads, num_inds, ln=False):
-        super(ISAB, self).__init__()
-        self.I = nn.Parameter(torch.Tensor(1, num_inds, dim_out))
-        nn.init.xavier_uniform_(self.I)
-        self.mab0 = MAB(dim_out, dim_in, dim_out, num_heads, ln=ln)
-        self.mab1 = MAB(dim_in, dim_out, dim_out, num_heads, ln=ln)
-
-    def forward(self, X):
-        H = self.mab0(self.I.repeat(X.size(0), 1, 1), X)
-        return self.mab1(X, H)
-
-class PMA(nn.Module):
-    def __init__(self, dim, num_heads, num_seeds, ln=False):
-        super(PMA, self).__init__()
-        self.S = nn.Parameter(torch.Tensor(1, num_seeds, dim))
-        nn.init.xavier_uniform_(self.S)
-        self.mab = MAB(dim, dim, dim, num_heads, ln=ln)
-
-    def forward(self, X):
-        return self.mab(self.S.repeat(X.size(0), 1, 1), X)
-
-class PositionalEncoding(nn.Module):
-
-    def __init__(self, d_hid, n_position=200):
-        super(PositionalEncoding, self).__init__()
-
-        # Not a parameter
-        self.register_buffer('pos_table', self._get_sinusoid_encoding_table(n_position, d_hid))
-
-    def _get_sinusoid_encoding_table(self, n_position, d_hid):
-        ''' Sinusoid position encoding table '''
-        # TODO: make it with torch instead of numpy
-
-        def get_position_angle_vec(position):
-            return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)]
-
-        sinusoid_table = np.array([get_position_angle_vec(pos_i) for pos_i in range(n_position)])
-        sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i
-        sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
-
-        return torch.FloatTensor(sinusoid_table).unsqueeze(0)
-
-    def forward(self, x):
-        return x + self.pos_table[:, :x.size(1)].clone().detach()
-
-class SetTransformerEncoder(nn.Module):
-    def __init__(self, dim_input, dim_output, num_inds=32, dim_hidden=128, num_heads=8, ln=False):
-        super(SetTransformerEncoder, self).__init__()
-        self.positional = PositionalEncoding(19)
-        self.dropout = nn.Dropout(0.1)
-
-        self.enc = nn.Sequential(
-            SAB(dim_input, dim_output, num_heads, ln=ln),
-            SAB(dim_output, dim_output, num_heads, ln=ln),
-        )
-
-        self.linear = nn.Linear(23 * dim_output, dim_output)
-
-        # self.dec = nn.Sequential(
-        #         PMA(dim_hidden, num_heads, num_outputs, ln=ln),
-        #         SAB(dim_hidden, dim_hidden, num_heads, ln=ln),
-        #         SAB(dim_hidden, dim_hidden, num_heads, ln=ln),
-        #         nn.Linear(dim_hidden, dim_output))
-
-    def forward(self, x):
-        # return self.dec(self.enc(X))
-        x = x.view(-1, 23, 19)
-        x = self.dropout(self.positional(x))
-        x = self.enc(x)
-        x = x.view(-1, 23*64)
-        x = self.linear(x)
-        return x
-
 
 
 class Generator(nn.Module):
@@ -274,7 +158,7 @@ class Generator(nn.Module):
         self.cardinality = 16
 
         self.bottom_h = self.input_size // 16
-        # self.Linear = nn.Linear(cv_class_num + self.link_num, self.bottom_h*self.bottom_h*32)
+        self.Linear = nn.Linear(cv_class_num + self.link_num, self.bottom_h*self.bottom_h*32)
         # self.Linear = nn.Linear(self.link_num, self.bottom_h*self.bottom_h*32)
 
         self.color_fc_out = 64
@@ -282,39 +166,35 @@ class Generator(nn.Module):
 
         no_bn = not net_opt['bn']
 
-        # if net_opt['relu']:
-        #     self.colorFC = nn.Sequential(
-        #         # nn.Linear(cv_class_num + self.link_num, self.color_fc_out), nn.ReLU(inplace=True),
-        #         nn.Linear(self.link_num, self.color_fc_out), nn.ReLU(inplace=True),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out), nn.ReLU(inplace=True),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out), nn.ReLU(inplace=True),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out)
-        #     )
-        # else:
-        #     self.colorFC = nn.Sequential(
-        #         # nn.Linear(cv_class_num + self.link_num, self.color_fc_out),
-        #         nn.Linear(self.link_num, self.color_fc_out),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out)
-        #     )
+        if net_opt['relu']:
+            self.colorFC = nn.Sequential(
+                nn.Linear(cv_class_num + self.link_num, self.color_fc_out), nn.ReLU(inplace=True),
+                # nn.Linear(self.link_num, self.color_fc_out), nn.ReLU(inplace=True),
+                nn.Linear(self.color_fc_out, self.color_fc_out), nn.ReLU(inplace=True),
+                nn.Linear(self.color_fc_out, self.color_fc_out), nn.ReLU(inplace=True),
+                nn.Linear(self.color_fc_out, self.color_fc_out)
+            )
+        else:
+            self.colorFC = nn.Sequential(
+                nn.Linear(cv_class_num + self.link_num, self.color_fc_out),
+                 # nn.Linear(self.link_num, self.color_fc_out),
+                nn.Linear(self.color_fc_out, self.color_fc_out),
+                nn.Linear(self.color_fc_out, self.color_fc_out),
+                nn.Linear(self.color_fc_out, self.color_fc_out)
+            )
 
-        self.set_transformer = SetTransformerEncoder(19, 64)
+        self.conv1 = self._make_encoder_block_first(self.input_dim, 16)
+        self.conv2 = self._make_encoder_block(16, 32)
+        self.conv3 = self._make_encoder_block(32, 64)
+        self.conv4 = self._make_encoder_block(64, 128)
+        self.conv5 = self._make_encoder_block(128, 256)
 
-        self.conv1 = self.make_encoder_block(self.input_dim, 16, True)
-        self.conv2 = self.make_encoder_block(16, 32)
-        self.conv3 = self.make_encoder_block(32, 64)
-        self.conv4 = self.make_encoder_block(64, 128)
-        self.conv5 = self.make_encoder_block(128, 256)
+        bottom_layer_len = 256 + 64 + (256 if net_opt['cit'] else 0)
 
-        bottom_layer_len = 256 #+ 64
-        if net_opt["cit"]:
-            bottom_layer_len += 256
-
-        self.deconv1 = DecoderBlock(bottom_layer_len, 4*256, self.color_fc_out, self.layers[0], no_bn=no_bn) # (output_size / 8, output_size / 8)
-        self.deconv2 = DecoderBlock(256 + 128, 4*128, self.color_fc_out, self.layers[1], no_bn=no_bn) # (output_size / 4, output_size / 4)
-        self.deconv3 = DecoderBlock(128 + 64, 4*64, self.color_fc_out, self.layers[2], no_bn=no_bn) # (output_size / 2, output_size / 2)
-        self.deconv4 = DecoderBlock(64 + 32, 4*32, self.color_fc_out, self.layers[3], no_bn=no_bn) # (output_size, output_size)
+        self.deconv1 = DecoderBlock(bottom_layer_len, 4*256, self.color_fc_out, self.layers[0], no_bn=no_bn)
+        self.deconv2 = DecoderBlock(256 + 128, 4*128, self.color_fc_out, self.layers[1], no_bn=no_bn)
+        self.deconv3 = DecoderBlock(128 + 64, 4*64, self.color_fc_out, self.layers[2], no_bn=no_bn)
+        self.deconv4 = DecoderBlock(64 + 32, 4*32, self.color_fc_out, self.layers[3], no_bn=no_bn)
         self.deconv5 = nn.Sequential(
             nn.Conv2d(32 + 16, 32, 3, 1, 1),
             nn.LeakyReLU(0.2),
@@ -325,14 +205,14 @@ class Generator(nn.Module):
         if net_opt['cit']:
             self.featureConv = FeatureConv(net_opt=net_opt)
 
-        # self.colorConv = nn.Sequential(
-        #     nn.Conv2d(32, 64, 3, 1, 1),
-        #     nn.LeakyReLU(0.2),
-        #     nn.Conv2d(64, 64, 3, 1, 1),
-        #     nn.LeakyReLU(0.2),
-        #     nn.Conv2d(64, 64, 3, 1, 1),
-        #     nn.Tanh(),
-        # )
+        self.colorConv = nn.Sequential(
+            nn.Conv2d(32, 64, 3, 1, 1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 64, 3, 1, 1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 64, 3, 1, 1),
+            nn.Tanh(),
+        )
 
         if net_opt['guide']:
             self.deconv_for_decoder = nn.Sequential(
@@ -356,16 +236,19 @@ class Generator(nn.Module):
             if hasattr(m, 'bias') and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def make_encoder_block(self, in_channels, out_channels, first=False):
-        if first:
-            stride = 1
-        else:
-            stride = 2
-
+    def _make_encoder_block(self, inplanes, planes):
         return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, stride, 1),
+            nn.Conv2d(inplanes, planes, 3, 2, 1),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(out_channels, out_channels, 3, 1, 1),
+            nn.Conv2d(planes, planes, 3, 1, 1),
+            nn.LeakyReLU(0.2),
+        )
+
+    def _make_encoder_block_first(self, inplanes, planes):
+        return nn.Sequential(
+            nn.Conv2d(inplanes, planes, 3, 1, 1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(planes, planes, 3, 1, 1),
             nn.LeakyReLU(0.2),
         )
 
@@ -380,30 +263,23 @@ class Generator(nn.Module):
         # it's about color variant tag set
         # temporally, don't think about noise z
 
-        # c_tag_class = torch.cat((c_tag_class, link), 1)
-        c_tag_class = link
+        c_tag_class = torch.cat((c_tag_class, link), 1)
+        # c_tag_class = link
 
-        # c_tag_tensor = self.Linear(c_tag_class)
-        # c_tag_tensor = c_tag_tensor.view(-1, 32, self.bottom_h, self.bottom_h)
-        # c_tag_tensor = self.colorConv(c_tag_tensor)
+        c_tag_tensor = self.Linear(c_tag_class)
+        c_tag_tensor = c_tag_tensor.view(-1, 32, self.bottom_h, self.bottom_h)
+        c_tag_tensor = self.colorConv(c_tag_tensor)
 
-        # c_se_tensor = self.colorFC(c_tag_class)
-        c_se_tensor = self.set_transformer(c_tag_class)
+        c_se_tensor = self.colorFC(c_tag_class)
 
         # ==============================
         # Convolution Layer for Feature Tensor
 
-        # if self.net_opt['cit']:
-        #     feature_tensor = self.featureConv(feature_tensor)
-        #     concat_tensor = torch.cat([out5, feature_tensor, c_tag_tensor], 1)
-        # else:
-        #     concat_tensor = torch.cat([out5, c_tag_tensor], 1)
-
         if self.net_opt['cit']:
             feature_tensor = self.featureConv(feature_tensor)
-            concat_tensor = torch.cat([out5, feature_tensor], 1)
+            concat_tensor = torch.cat([out5, feature_tensor, c_tag_tensor], 1)
         else:
-            concat_tensor = out5
+            concat_tensor = torch.cat([out5, c_tag_tensor], 1)
 
         out4_prime = self.deconv1(concat_tensor, c_se_tensor)
 
@@ -437,8 +313,8 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
         self.input_dim = input_dim
         self.input_size = input_size
-        # self.cv_class_num = cv_class_num + 23 * 19
-        self.cv_class_num = 23 * 19
+        self.cv_class_num = cv_class_num + 23 * 19
+         # self.cv_class_num = 23 * 19
         self.iv_class_num = iv_class_num
         self.cardinality = 16
 

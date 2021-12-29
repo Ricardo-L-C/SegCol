@@ -132,12 +132,6 @@ class tag2pix(object):
             self.L1Loss.to(self.device)
 
     def train(self):
-        self.train_hist = {}
-        self.train_hist['D_loss'] = []
-        self.train_hist['G_loss'] = []
-        self.train_hist['per_epoch_time'] = []
-        self.train_hist['total_time'] = []
-
         self.y_real_, self.y_fake_ = torch.ones(self.batch_size, 1), torch.zeros(self.batch_size, 1)
 
         if self.gpu_mode:
@@ -193,7 +187,8 @@ class tag2pix(object):
                 D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
                 D_f_fake_loss = self.BCE_loss(D_f_fake, self.y_fake_)
 
-                cv_and_link = torch.cat((cv_tag_, link_), 1)
+                cv_and_link = link_
+                # cv_and_link = torch.cat((cv_tag_, link_), 1)
 
                 if self.two_step_epoch == 0 or epoch >= self.two_step_epoch:
                     CIT_real_loss = self.BCE_loss(CIT_real, iv_tag_) if self.net_opt['cit'] else 0
@@ -210,8 +205,6 @@ class tag2pix(object):
                     C_f_fake_loss = 0
 
                 D_loss = self.adv_lambda * (D_real_loss + D_f_fake_loss) + (C_real_loss + C_f_fake_loss)
-
-                self.train_hist['D_loss'].append(D_loss.item())
 
                 D_loss.backward()
                 self.D_optimizer.step()
@@ -242,25 +235,20 @@ class tag2pix(object):
                 G_loss = (D_f_fake_loss + C_f_fake_loss) + \
                          (L1_D_f_fake_loss + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
 
-                self.train_hist['G_loss'].append(G_loss.item())
-
                 G_loss.backward()
                 self.G_optimizer.step()
 
-                if epoch == 1 and iter == 1:
-                    self.visualize_results(-1)
+                if epoch == 1 and iter == 100:
+                    self.visualize_results(epoch)
 
-                if ((iter + 1) % 1000) == 0:
+                if ((iter + 1) % 500) == 0:
                     with torch.no_grad():
                         self.visualize_results(epoch)
                     print("Epoch: [{:2d}] [{:4d}/{:4d}] D_loss: {:.8f}, G_loss: {:.8f}".format(
                         epoch, (iter + 1), max_iter, D_loss.item(), G_loss.item()))
 
-            self.train_hist['per_epoch_time'].append(time.time() - epoch_start_time)
-
             with torch.no_grad():
                 self.visualize_results(epoch)
-                #utils.loss_plot(self.train_hist, self.result_path, epoch)
 
             if epoch >= self.save_all_epoch > 0:
                 self.save(epoch)
@@ -272,11 +260,6 @@ class tag2pix(object):
         if self.save_freq == 0 or epoch % self.save_freq != 0:
             if self.save_all_epoch <= 0 or epoch < self.save_all_epoch:
                 self.save(epoch)
-
-        self.train_hist['total_time'].append(time.time() - start_time)
-        print("Avg one epoch time: {:.2f}, total {} epochs time: {:.2f}".format(
-            np.mean(self.train_hist['per_epoch_time']), self.epoch, self.train_hist['total_time'][0]))
-
 
     def test(self):
         self.load_test(self.args.load)
@@ -364,9 +347,6 @@ class tag2pix(object):
             'result_path' : str(save_dir)
             }, str(save_dir / 'tag2pix_{}_epoch.pkl'.format(save_epoch)))
 
-        with (save_dir / 'tag2pix_{}_history.pkl'.format(save_epoch)).open('wb') as f:
-            pickle.dump(self.train_hist, f)
-
         print("============= save success =============")
         print("epoch from {} to {}".format(self.start_epoch, save_epoch))
         print("save result path is {}".format(str(self.result_path)))
@@ -383,10 +363,10 @@ class tag2pix(object):
         self.D_optimizer.load_state_dict(checkpoint['D_optimizer'])
         self.start_epoch = checkpoint['finish_epoch'] + 1
 
-        self.finish_epoch = self.args.epoch + self.start_epoch - 1
+        self.end_epoch = self.args.epoch + self.start_epoch - 1
 
         print("============= load success =============")
-        print("epoch start from {} to {}".format(self.start_epoch, self.finish_epoch))
+        print("epoch start from {} to {}".format(self.start_epoch, self.end_epoch))
         print("previous result path is {}".format(checkpoint['result_path']))
 
 
