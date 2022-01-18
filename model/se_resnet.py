@@ -94,13 +94,13 @@ class SEResNeXt(nn.Module):
                 nn.init.kaiming_normal_(m.weight)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-                
+
     def _make_layer(self, block, planes, blocks, stride=1, inplanes=None):
         downsample = None
 
         if inplanes:
             self.inplanes = inplanes
-            
+
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
                 nn.Conv2d(self.inplanes, planes * block.expansion,
@@ -132,7 +132,7 @@ class SEResNeXt(nn.Module):
 
         x = self.fc(x)
         x = self.classifier(x)
-        
+
         return x
 
 def se_resnext50(**kwargs):

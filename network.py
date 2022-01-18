@@ -204,7 +204,6 @@ class PMA(nn.Module):
         return self.mab(self.S.repeat(X.size(0), 1, 1), X)
 
 class PositionalEncoding(nn.Module):
-
     def __init__(self, d_hid, n_position=200):
         super(PositionalEncoding, self).__init__()
 
@@ -230,8 +229,8 @@ class PositionalEncoding(nn.Module):
 class SetTransformerEncoder(nn.Module):
     def __init__(self, dim_input, dim_output, num_inds=32, dim_hidden=128, num_heads=8, ln=False):
         super(SetTransformerEncoder, self).__init__()
-        self.positional = PositionalEncoding(19)
-        self.dropout = nn.Dropout(0.1)
+        # self.positional = PositionalEncoding(19)
+        # self.dropout = nn.Dropout(0.1)
 
         self.enc = nn.Sequential(
             SAB(dim_input, dim_output, num_heads, ln=ln),
@@ -249,7 +248,7 @@ class SetTransformerEncoder(nn.Module):
     def forward(self, x):
         # return self.dec(self.enc(X))
         x = x.view(-1, 23, 19)
-        x = self.dropout(self.positional(x))
+        # x = self.dropout(self.positional(x))
         x = self.enc(x)
         x = x.view(-1, 23*64)
         x = self.linear(x)
@@ -433,7 +432,7 @@ class Generator(nn.Module):
         return full_output, decoder_output
 
 class Discriminator(nn.Module):
-    def __init__(self, input_dim=3, output_dim=1, input_size=256, cv_class_num=115, iv_class_num=370, net_opt=DEFAULT_NET_OPT):
+    def __init__(self, input_dim=6, output_dim=1, input_size=256, cv_class_num=115, iv_class_num=370, net_opt=DEFAULT_NET_OPT):
         super(Discriminator, self).__init__()
         self.input_dim = input_dim
         self.input_size = input_size

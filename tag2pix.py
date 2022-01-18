@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import grad
 from PIL import Image
@@ -14,8 +15,9 @@ import utils
 from loader.dataloader import get_dataset, get_tag_dict, ColorSpace2RGB
 from network import Discriminator
 from model.se_resnet import BottleneckX, SEResNeXt
-from model.pretrained import se_resnext_half
+from model.pretrained import pretrain_rgb2hsv, se_resnext_half, Vgg16
 
+from torch.utils.tensorboard import SummaryWriter
 
 class tag2pix(object):
     def __init__(self, args):
@@ -76,6 +78,12 @@ class tag2pix(object):
                 self.result_path.mkdir()
 
             self.test_images = self.get_test_data(self.test_data_loader, args.test_image_count)
+
+            logger_path = self.result_path / "logger"
+            if not logger_path.exists():
+                logger_path.mkdir()
+            self.logger = SummaryWriter(str(logger_path))
+
         else:
             self.test_data_loader = get_dataset(args)
             self.result_path = Path(args.result_dir)
@@ -96,7 +104,7 @@ class tag2pix(object):
 
         self.G = Generator(input_size=args.input_size, layers=args.layers,
                 cv_class_num=cvt_class_num, iv_class_num=cit_class_num, net_opt=self.net_opt)
-        self.D = Discriminator(input_dim=3, output_dim=1, input_size=self.input_size,
+        self.D = Discriminator(input_dim=6, output_dim=1, input_size=self.input_size,
                 cv_class_num=cvt_class_num, iv_class_num=cit_class_num)
 
         for param in self.Pretrain_ResNeXT.parameters():
@@ -118,6 +126,9 @@ class tag2pix(object):
         self.CE_loss = nn.CrossEntropyLoss()
         self.L1Loss = nn.L1Loss()
 
+        self.rgb2hsv = pretrain_rgb2hsv()
+        self.vgg16 = nn.DataParallel(Vgg16())
+
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         print("gpu mode: ", self.gpu_mode)
         print("device: ", self.device)
@@ -130,6 +141,8 @@ class tag2pix(object):
             self.BCE_loss.to(self.device)
             self.CE_loss.to(self.device)
             self.L1Loss.to(self.device)
+            self.rgb2hsv.to(self.device)
+            self.vgg16.to(self.device)
 
     def train(self):
         self.y_real_, self.y_fake_ = torch.ones(self.batch_size, 1), torch.zeros(self.batch_size, 1)
@@ -147,13 +160,11 @@ class tag2pix(object):
 
         self.D.train()
         print('training start!!')
-        start_time = time.time()
 
         for epoch in range(self.start_epoch, self.end_epoch + 1):
             print("EPOCH: {}".format(epoch))
 
             self.G.train()
-            epoch_start_time = time.time()
 
             if epoch == self.brightness_epoch:
                 print('changing brightness ...')
@@ -177,12 +188,18 @@ class tag2pix(object):
                 if self.gpu_mode:
                     feature_tensor = feature_tensor.to(self.device)
 
-                D_real, CIT_real, CVT_real = self.D(original_)
+                hsv_t = self.rgb2hsv(original_)
+                gt = torch.cat([original_, hsv_t], 1)
+
+                D_real, CIT_real, CVT_real = self.D(gt)
                 D_real_loss = self.BCE_loss(D_real, self.y_real_)
 
                 G_f, _ = self.G(sketch_, feature_tensor, cv_tag_, link_)
+                hsv_f = self.rgb2hsv(G_f)
                 if self.gpu_mode:
-                    G_f = G_f.to(self.device)
+                    G_f, hsv_f = G_f.to(self.device), hsv_f.to(self.device)
+
+                G_f = torch.cat([G_f, hsv_f], 1)
 
                 D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
                 D_f_fake_loss = self.BCE_loss(D_f_fake, self.y_fake_)
@@ -217,26 +234,51 @@ class tag2pix(object):
                 if self.gpu_mode:
                     G_f, G_g = G_f.to(self.device), G_g.to(self.device)
 
+                perceptual_g, perceptual_gt = self.vgg16(G_f), self.vgg16(original_)
+                perceptual_g, perceptual_gt = perceptual_g.to(self.device), perceptual_gt.to(self.device)
+
+                perceptual = F.mse_loss(perceptual_g, perceptual_gt)
+
+                hsv_fake, hsv_real = self.rgb2hsv(G_f), self.rgb2hsv(original_)
+
+                if self.gpu_mode:
+                    hsv_fake, hsv_real = hsv_fake.to(self.device), hsv_real.to(self.device)
+
+                hsv_l1 = F.l1_loss(hsv_fake, hsv_real)
+
+                G_f = torch.cat([G_f, hsv_fake], 1)
                 D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
 
                 D_f_fake_loss = self.BCE_loss(D_f_fake, self.y_real_)
+
+                step = (epoch - 1) * max_iter + iter
 
                 if self.two_step_epoch == 0 or epoch >= self.two_step_epoch:
                     CIT_f_fake_loss = self.BCE_loss(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
                     CVT_f_fake_loss = self.BCE_loss(CVT_f_fake, cv_and_link)
 
                     C_f_fake_loss = self.cvt_weight * CVT_f_fake_loss + self.cit_weight * CIT_f_fake_loss
+
+                    self.logger.add_scalar("CIT_f_fake_loss", CIT_f_fake_loss.item(), step)
+                    self.logger.add_scalar("CVT_f_fake_loss", CVT_f_fake_loss.item(), step)
                 else:
                     C_f_fake_loss = 0
 
-                L1_D_f_fake_loss = self.L1Loss(G_f, original_)
+                # L1_D_f_fake_loss = self.L1Loss(G_f, original_)
                 L1_D_g_fake_loss = self.L1Loss(G_g, original_) if self.net_opt['guide'] else 0
 
-                G_loss = (D_f_fake_loss + C_f_fake_loss) + \
-                         (L1_D_f_fake_loss + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
+                # G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + L1_D_f_fake_loss + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
+                G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + perceptual + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
 
                 G_loss.backward()
                 self.G_optimizer.step()
+
+                # self.logger.add_scalar("L1", L1_D_f_fake_loss.item(), step)
+                self.logger.add_scalar("L1_HSV", hsv_l1.item(), step)
+                self.logger.add_scalar("guide", L1_D_g_fake_loss.item(), step)
+                self.logger.add_scalar("D_f_fake_loss", D_f_fake_loss.item(), step)
+                self.logger.add_scalar("G_loss", G_loss.item(), step)
+                self.logger.add_scalar("perceptual", perceptual.item(), step)
 
                 if epoch == 1 and iter == 100:
                     self.visualize_results(epoch)

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+from torchvision import models
 
 # Pretrained version
 class Selayer(nn.Module):
@@ -132,10 +133,10 @@ class SEResNeXt_Origin(nn.Module):
 
         x = self.fc(x)
         x = self.classifier(x)
-        
+
         return x
 
-    
+
 class SEResNeXt_Half(SEResNeXt_Origin):
     def remove_half(self):
         self.layer3 = None
@@ -159,7 +160,7 @@ class SEResNeXt_Half(SEResNeXt_Origin):
 def load_weight(model, pretrained_dict):
     model_dict = model.state_dict()
     pretrained_dict = {k[7:]: v for k, v in pretrained_dict.items() if k[7:] in model_dict}
-    model_dict.update(pretrained_dict) 
+    model_dict.update(pretrained_dict)
     model.load_state_dict(pretrained_dict)
 
 def se_resnext_half(dump_path, **kwargs):
@@ -170,4 +171,133 @@ def se_resnext_half(dump_path, **kwargs):
         model.remove_half()
 
     return model
-    
+
+
+class ResNext_block(nn.Module):
+    def __init__(self):
+        super(ResNext_block, self).__init__()
+
+        self.conv1 = nn.Conv2d(64, 32, 1, 1)
+        self.conv2 = nn.Conv2d(32, 32, 3, 1, 1)
+        self.conv3 = nn.Conv2d(32, 64, 1, 1)
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        y = self.conv1(x)
+        y = self.relu(y)
+
+        y = self.conv2(y)
+        y = self.relu(y)
+
+        y = self.conv3(y)
+
+        y += x
+        y = self.relu(y)
+
+        return y
+
+class Rgb2hsv(nn.Module):
+    def __init__(self):
+        super(Rgb2hsv, self).__init__()
+
+        self.enc1 = nn.Sequential(
+            nn.Conv2d(3, 16, 3, 2, 1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(16, 16, 3, 1, 1),
+            nn.LeakyReLU(0.2),
+        )
+
+        self.enc2 = nn.Sequential(
+            nn.Conv2d(16, 32, 3, 2, 1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(32, 32, 3, 1, 1),
+            nn.LeakyReLU(0.2),
+        )
+
+        self.enc3 = nn.Sequential(
+            nn.Conv2d(32, 64, 3, 2, 1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 64, 3, 1, 1),
+            nn.LeakyReLU(0.2),
+        )
+
+        self.res_blocks = nn.Sequential(*[ResNext_block() for _ in range(3)])
+
+        self.dec1 = nn.Sequential(
+            nn.ConvTranspose2d(64+64, 32, 3, stride=2, padding=1, output_padding=1),
+            nn.LeakyReLU(0.2),
+        )
+
+        self.dec2 = nn.Sequential(
+            nn.ConvTranspose2d(32+32, 16, 3, stride=2, padding=1, output_padding=1),
+            nn.LeakyReLU(0.2),
+        )
+
+        self.dec3 = nn.Sequential(
+            nn.ConvTranspose2d(16+16, 3, 3, stride=2, padding=1, output_padding=1),
+            nn.LeakyReLU(0.2),
+        )
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+            elif isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight)
+            if hasattr(m, 'bias') and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, rgb):
+
+        enc1 = self.enc1(rgb)
+        enc2 = self.enc2(enc1)
+        enc3 = self.enc3(enc2)
+
+        hsv = self.res_blocks(enc3)
+
+        hsv = self.dec1(torch.cat([hsv, enc3], 1))
+        hsv = self.dec2(torch.cat([hsv, enc2], 1))
+        hsv = self.dec3(torch.cat([hsv, enc1], 1))
+
+        return hsv
+
+def pretrain_rgb2hsv():
+    model = nn.DataParallel(Rgb2hsv())
+
+    weight = torch.load("rgb2hsv.pkl")
+    model.load_state_dict(weight['rgb2hsv2'])
+
+    for i in model.parameters():
+        i.requires_grad = False
+
+    return model
+
+
+class Vgg16(nn.Module):
+    def __init__(self):
+        super(Vgg16, self).__init__()
+        features = models.vgg16(pretrained=True).features
+        self.to_relu_1_2 = nn.Sequential()
+        self.to_relu_2_2 = nn.Sequential()
+        # self.to_relu_3_3 = nn.Sequential()
+        # self.to_relu_4_3 = nn.Sequential()
+
+        for x in range(4):
+            self.to_relu_1_2.add_module(str(x), features[x])
+        for x in range(4, 9):
+            self.to_relu_2_2.add_module(str(x), features[x])
+        # for x in range(9, 16):
+        #     self.to_relu_3_3.add_module(str(x), features[x])
+        # for x in range(16, 23):
+        #     self.to_relu_4_3.add_module(str(x), features[x])
+
+        # don't need the gradients, just want the features
+        for param in self.parameters():
+            param.requires_grad = False
+
+    def forward(self, x):
+        x = self.to_relu_1_2(x)
+        x = self.to_relu_2_2(x)
+        return x

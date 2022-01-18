@@ -2,14 +2,13 @@ import pickle, random
 import math, time, platform
 from pathlib import Path
 
-import cv2
 import torch
 import numpy as np
 from PIL import Image
 from skimage import color
 from torch import tensor
 
-from torchvision import transforms, datasets
+from torchvision import transforms
 from torchvision.transforms import functional as tvF
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset  # For custom datasets

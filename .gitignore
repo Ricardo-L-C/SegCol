@@ -16,4 +16,5 @@ results/
 preprocessor/waifu2x-caffe
 dataset
 !dataset/tag_dump.pkl
-temp.txt
+rgb2hsv/
+rgb2hsv2/
