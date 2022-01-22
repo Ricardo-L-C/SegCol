@@ -254,7 +254,15 @@ class SetTransformerEncoder(nn.Module):
         x = self.linear(x)
         return x
 
+class SimpleDecoderBlock(nn.Module):
+    def __init__(self, inplanes, planes):
+        super(SimpleDecoderBlock, self).__init__()
+        self.decoder = nn.Conv2d(inplanes, planes, 3, 1, 1)
+        self.ps = nn.PixelShuffle(2)
 
+    def forward(self, x):
+        x = self.decoder(x)
+        return self.ps(x)
 
 class Generator(nn.Module):
     def __init__(self, input_size, cv_class_num, iv_class_num, input_dim=1, output_dim=3,
@@ -311,13 +319,24 @@ class Generator(nn.Module):
             bottom_layer_len += 256
 
         self.deconv1 = DecoderBlock(bottom_layer_len, 4*256, self.color_fc_out, self.layers[0], no_bn=no_bn) # (output_size / 8, output_size / 8)
-        self.deconv2 = DecoderBlock(256 + 128, 4*128, self.color_fc_out, self.layers[1], no_bn=no_bn) # (output_size / 4, output_size / 4)
-        self.deconv3 = DecoderBlock(128 + 64, 4*64, self.color_fc_out, self.layers[2], no_bn=no_bn) # (output_size / 2, output_size / 2)
-        self.deconv4 = DecoderBlock(64 + 32, 4*32, self.color_fc_out, self.layers[3], no_bn=no_bn) # (output_size, output_size)
+        self.deconv2 = DecoderBlock(256 + 128 + 256, 4*128, self.color_fc_out, self.layers[1], no_bn=no_bn) # (output_size / 4, output_size / 4)
+        self.deconv3 = DecoderBlock(128 + 64 + 128, 4*64, self.color_fc_out, self.layers[2], no_bn=no_bn) # (output_size / 2, output_size / 2)
+        self.deconv4 = DecoderBlock(64 + 32 + 64, 4*32, self.color_fc_out, self.layers[3], no_bn=no_bn) # (output_size, output_size)
         self.deconv5 = nn.Sequential(
-            nn.Conv2d(32 + 16, 32, 3, 1, 1),
+            nn.Conv2d(32 + 16 + 32, 32, 3, 1, 1),
             nn.LeakyReLU(0.2),
             nn.Conv2d(32, 3, 3, 1, 1),
+            nn.Tanh(),
+        )
+
+        self.ske_deconv1 = SimpleDecoderBlock(bottom_layer_len, 4*256)
+        self.ske_deconv2 = SimpleDecoderBlock(256 + 128, 4*128)
+        self.ske_deconv3 = SimpleDecoderBlock(128 + 64, 4*64)
+        self.ske_deconv4 = SimpleDecoderBlock(64 + 32, 4*32)
+        self.ske_deconv5 = nn.Sequential(
+            nn.Conv2d(32 + 16, 32, 3, 1, 1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(32, 1, 3, 1, 1),
             nn.Tanh(),
         )
 
@@ -404,22 +423,23 @@ class Generator(nn.Module):
         else:
             concat_tensor = out5
 
+        out4_ske = self.ske_deconv1(concat_tensor)
         out4_prime = self.deconv1(concat_tensor, c_se_tensor)
 
         # ==============================
         # Deconv layers
 
-        concat_tensor = torch.cat([out4_prime, out4], 1)
-        out3_prime = self.deconv2(concat_tensor, c_se_tensor)
+        out3_ske = self.ske_deconv2(torch.cat([out4_ske, out4], 1))
+        out3_prime = self.deconv2(torch.cat([out4_prime, out4_ske, out4], 1), c_se_tensor)
 
-        concat_tensor = torch.cat([out3_prime, out3], 1)
-        out2_prime = self.deconv3(concat_tensor, c_se_tensor)
+        out2_ske = self.ske_deconv3(torch.cat([out3_ske, out3], 1))
+        out2_prime = self.deconv3(torch.cat([out3_prime, out3_ske, out3], 1), c_se_tensor)
 
-        concat_tensor = torch.cat([out2_prime, out2], 1)
-        out1_prime = self.deconv4(concat_tensor, c_se_tensor)
+        out1_ske = self.ske_deconv4(torch.cat([out2_ske, out2], 1))
+        out1_prime = self.deconv4(torch.cat([out2_prime, out2_ske, out2], 1), c_se_tensor)
 
-        concat_tensor = torch.cat([out1_prime, out1], 1)
-        full_output = self.deconv5(concat_tensor)
+        skeleton_output = self.ske_deconv5(torch.cat([out1_ske, out1], 1))
+        full_output = self.deconv5(torch.cat([out1_prime, out1_ske, out1], 1))
 
         # ==============================
         # out4_prime should be input of Guide Decoder
@@ -429,7 +449,7 @@ class Generator(nn.Module):
         else:
             decoder_output = full_output
 
-        return full_output, decoder_output
+        return full_output, decoder_output, skeleton_output
 
 class Discriminator(nn.Module):
     def __init__(self, input_dim=6, output_dim=1, input_size=256, cv_class_num=115, iv_class_num=370, net_opt=DEFAULT_NET_OPT):

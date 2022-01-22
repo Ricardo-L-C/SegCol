@@ -203,10 +203,12 @@ class ColorAndSketchDataset(Dataset):
 
         sketch_path = random.choice(self.sketch_path_list)
         color_path = self.rgb_path / f"{file_id}.png"
+        skeleton_path = sketch_path.with_name(f"{sketch_path.name.split('_')[0]}_skeleton") / f"{file_id}.png"
         sketch_path = sketch_path / f"{file_id}.png"
 
         color_img = Image.open(color_path).convert('RGB')
         sketch_img = Image.open(sketch_path).convert('L')  # to [1, H, W]
+        skeleton_img = Image.open(skeleton_path).convert('L')
 
         if self.both_transform is not None:
             color_img, sketch_img = self.both_transform(color_img, sketch_img)
@@ -214,12 +216,13 @@ class ColorAndSketchDataset(Dataset):
             color_img = self.color_transform(color_img)
         if self.sketch_transform is not None:
             sketch_img = self.sketch_transform(sketch_img)
+            skeleton_img = self.sketch_transform(skeleton_img)
 
         if self.link:
             link_class = self.link_list[index]
-            return (color_img, sketch_img, iv_tag_class, cv_tag_class, link_class)
+            return (color_img, sketch_img, skeleton_img, iv_tag_class, cv_tag_class, link_class)
         else:
-            return (color_img, sketch_img, iv_tag_class, cv_tag_class)
+            return (color_img, sketch_img, skeleton_img, iv_tag_class, cv_tag_class)
 
     def __len__(self):
         return self.data_len

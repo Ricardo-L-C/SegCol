@@ -172,13 +172,13 @@ class tag2pix(object):
 
             max_iter = self.train_data_loader.dataset.__len__() // self.batch_size
 
-            for iter, (original_, sketch_, iv_tag_, cv_tag_, link_) in enumerate(tqdm(self.train_data_loader, ncols=80)):
+            for iter, (original_, sketch_, skeleton_, iv_tag_, cv_tag_, link_) in enumerate(tqdm(self.train_data_loader, ncols=80)):
                 if iter >= max_iter:
                     break
 
                 if self.gpu_mode:
-                    sketch_, original_, iv_tag_, cv_tag_, link_ = \
-                        sketch_.to(self.device), original_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device), link_.to(self.device)
+                    sketch_, original_, skeleton_, iv_tag_, cv_tag_, link_ = \
+                        sketch_.to(self.device), original_.to(self.device), skeleton_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device), link_.to(self.device)
 
                 # update D network
                 self.D_optimizer.zero_grad()
@@ -194,7 +194,7 @@ class tag2pix(object):
                 D_real, CIT_real, CVT_real = self.D(gt)
                 D_real_loss = self.BCE_loss(D_real, self.y_real_)
 
-                G_f, _ = self.G(sketch_, feature_tensor, cv_tag_, link_)
+                G_f, _, _ = self.G(sketch_, feature_tensor, cv_tag_, link_)
                 hsv_f = self.rgb2hsv(G_f)
                 if self.gpu_mode:
                     G_f, hsv_f = G_f.to(self.device), hsv_f.to(self.device)
@@ -229,7 +229,7 @@ class tag2pix(object):
                 # update G network
                 self.G_optimizer.zero_grad()
 
-                G_f, G_g = self.G(sketch_, feature_tensor, cv_tag_, link_)
+                G_f, G_g, G_s = self.G(sketch_, feature_tensor, cv_tag_, link_)
 
                 if self.gpu_mode:
                     G_f, G_g = G_f.to(self.device), G_g.to(self.device)
@@ -245,6 +245,7 @@ class tag2pix(object):
                     hsv_fake, hsv_real = hsv_fake.to(self.device), hsv_real.to(self.device)
 
                 hsv_l1 = F.l1_loss(hsv_fake, hsv_real)
+                skeleton_l1 = F.l1_loss(G_s, skeleton_)
 
                 G_f = torch.cat([G_f, hsv_fake], 1)
                 D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
@@ -268,13 +269,14 @@ class tag2pix(object):
                 L1_D_g_fake_loss = self.L1Loss(G_g, original_) if self.net_opt['guide'] else 0
 
                 # G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + L1_D_f_fake_loss + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
-                G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + perceptual + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
+                G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + skeleton_l1 + perceptual + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
 
                 G_loss.backward()
                 self.G_optimizer.step()
 
                 # self.logger.add_scalar("L1", L1_D_f_fake_loss.item(), step)
                 self.logger.add_scalar("L1_HSV", hsv_l1.item(), step)
+                self.logger.add_scalar("L1_skeleton", hsv_l1.item(), step)
                 self.logger.add_scalar("guide", L1_D_g_fake_loss.item(), step)
                 self.logger.add_scalar("D_f_fake_loss", D_f_fake_loss.item(), step)
                 self.logger.add_scalar("G_loss", G_loss.item(), step)
@@ -326,7 +328,7 @@ class tag2pix(object):
                 if self.gpu_mode:
                     feature_tensor = feature_tensor.to(self.device)
 
-                G_f, _ = self.G(sketch_, feature_tensor, cv_tag_, link_)
+                G_f, _, _ = self.G(sketch_, feature_tensor, cv_tag_, link_)
                 G_f = self.color_revert(G_f.cpu())
 
                 for ind, result in zip(index_.cpu().numpy(), G_f):
@@ -357,19 +359,23 @@ class tag2pix(object):
                 original_, sketch_, iv_tag_, cv_tag_, feature_tensor, link_ = \
                     original_.to(self.device), sketch_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device), feature_tensor.to(self.device), link_.to(self.device)
 
-            G_f, G_g = self.G(sketch_, feature_tensor, cv_tag_, link_)
+            G_f, G_g, G_s = self.G(sketch_, feature_tensor, cv_tag_, link_)
 
             if self.gpu_mode:
                 G_f = G_f.cpu()
                 G_g = G_g.cpu()
+                G_s = G_s.cpu()
 
             G_f = self.color_revert(G_f)
             G_g = self.color_revert(G_g)
+            G_s = self.color_revert(G_s)
 
         utils.save_images(G_f[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim],
                           self.result_path / 'tag2pix_epoch{:03d}_G_f.png'.format(epoch))
         utils.save_images(G_g[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim],
                           self.result_path / 'tag2pix_epoch{:03d}_G_g.png'.format(epoch))
+        utils.save_images(G_s[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim],
+                          self.result_path / 'tag2pix_epoch{:03d}_G_s.png'.format(epoch))
 
     def save(self, save_epoch):
         if not self.result_path.exists():
@@ -415,7 +421,7 @@ class tag2pix(object):
     def get_test_data(self, test_data_loader, count):
         test_count = 0
         original_, sketch_, iv_tag_, cv_tag_, link_ = [], [], [], [], []
-        for orig, sket, ivt, cvt, link in test_data_loader:
+        for orig, sket, _, ivt, cvt, link in test_data_loader:
             original_.append(orig)
             sketch_.append(sket)
             iv_tag_.append(ivt)
