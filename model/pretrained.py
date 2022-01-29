@@ -165,35 +165,31 @@ def load_weight(model, pretrained_dict):
 
 def se_resnext_half(dump_path, **kwargs):
     model = SEResNeXt_Half(BottleneckX_Origin, [3, 4, 6, 3], **kwargs)
-    with open(dump_path, 'rb') as f:
-        network_weight = torch.load(f)['weight']
-        load_weight(model, network_weight)
-        model.remove_half()
+
+    network_weight = torch.load(dump_path, map_location=torch.device("cpu"))['weight']
+    load_weight(model, network_weight)
+    model.remove_half()
 
     return model
 
-
-class ResNext_block(nn.Module):
+class ConvNext_block(nn.Module):
     def __init__(self):
-        super(ResNext_block, self).__init__()
+        super(ConvNext_block, self).__init__()
 
-        self.conv1 = nn.Conv2d(64, 32, 1, 1)
-        self.conv2 = nn.Conv2d(32, 32, 3, 1, 1)
-        self.conv3 = nn.Conv2d(32, 64, 1, 1)
-
-        self.relu = nn.ReLU(inplace=True)
+        self.conv1 = nn.Conv2d(64, 64, 3, 1, 1)
+        self.ln = nn.LayerNorm([32, 32])
+        self.conv2 = nn.Conv2d(64, 256, 1, 1)
+        self.gelu = nn.GELU()
+        self.conv3 = nn.Conv2d(256, 64, 1, 1)
 
     def forward(self, x):
         y = self.conv1(x)
-        y = self.relu(y)
-
+        y = self.ln(y)
         y = self.conv2(y)
-        y = self.relu(y)
-
+        y = self.gelu(y)
         y = self.conv3(y)
 
         y += x
-        y = self.relu(y)
 
         return y
 
@@ -222,32 +218,25 @@ class Rgb2hsv(nn.Module):
             nn.LeakyReLU(0.2),
         )
 
-        self.res_blocks = nn.Sequential(*[ResNext_block() for _ in range(3)])
+        self.res_blocks = nn.Sequential(*[ConvNext_block() for _ in range(3)])
 
         self.dec1 = nn.Sequential(
-            nn.ConvTranspose2d(64+64, 32, 3, stride=2, padding=1, output_padding=1),
+            nn.Conv2d(64+64, 32*4, 3, 1, 1),
             nn.LeakyReLU(0.2),
+            nn.PixelShuffle(2),
         )
 
         self.dec2 = nn.Sequential(
-            nn.ConvTranspose2d(32+32, 16, 3, stride=2, padding=1, output_padding=1),
+            nn.Conv2d(32+32, 16*4, 3, 1, 1),
             nn.LeakyReLU(0.2),
+            nn.PixelShuffle(2),
         )
 
         self.dec3 = nn.Sequential(
-            nn.ConvTranspose2d(16+16, 3, 3, stride=2, padding=1, output_padding=1),
+            nn.Conv2d(16+16, 3*4, 3, 1, 1),
             nn.LeakyReLU(0.2),
+            nn.PixelShuffle(2),
         )
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-            elif isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight)
-            if hasattr(m, 'bias') and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
 
     def forward(self, rgb):
 
@@ -263,11 +252,10 @@ class Rgb2hsv(nn.Module):
 
         return hsv
 
-def pretrain_rgb2hsv():
-    model = nn.DataParallel(Rgb2hsv())
 
-    weight = torch.load("rgb2hsv.pkl")
-    model.load_state_dict(weight['rgb2hsv2'])
+def pretrain_rgb2hsv():
+    model = Rgb2hsv()
+    model.load_state_dict(torch.load("rgb2hsv3.pth", map_location=torch.device("cpu")))
 
     for i in model.parameters():
         i.requires_grad = False

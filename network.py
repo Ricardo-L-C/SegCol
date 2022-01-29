@@ -1,10 +1,9 @@
+from numpy import full_like
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 import math
-
-import numpy as np
 
 from model.se_resnet import BottleneckX, SEResNeXt
 from model.options import DEFAULT_NET_OPT
@@ -203,29 +202,6 @@ class PMA(nn.Module):
     def forward(self, X):
         return self.mab(self.S.repeat(X.size(0), 1, 1), X)
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_hid, n_position=200):
-        super(PositionalEncoding, self).__init__()
-
-        # Not a parameter
-        self.register_buffer('pos_table', self._get_sinusoid_encoding_table(n_position, d_hid))
-
-    def _get_sinusoid_encoding_table(self, n_position, d_hid):
-        ''' Sinusoid position encoding table '''
-        # TODO: make it with torch instead of numpy
-
-        def get_position_angle_vec(position):
-            return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)]
-
-        sinusoid_table = np.array([get_position_angle_vec(pos_i) for pos_i in range(n_position)])
-        sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i
-        sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
-
-        return torch.FloatTensor(sinusoid_table).unsqueeze(0)
-
-    def forward(self, x):
-        return x + self.pos_table[:, :x.size(1)].clone().detach()
-
 class SetTransformerEncoder(nn.Module):
     def __init__(self, dim_input, dim_output, num_inds=32, dim_hidden=128, num_heads=8, ln=False):
         super(SetTransformerEncoder, self).__init__()
@@ -324,7 +300,7 @@ class Generator(nn.Module):
         self.deconv4 = DecoderBlock(64 + 32 + 64, 4*32, self.color_fc_out, self.layers[3], no_bn=no_bn) # (output_size, output_size)
         self.deconv5 = nn.Sequential(
             nn.Conv2d(32 + 16 + 32, 32, 3, 1, 1),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(32, 3, 3, 1, 1),
             nn.Tanh(),
         )
@@ -335,7 +311,7 @@ class Generator(nn.Module):
         self.ske_deconv4 = SimpleDecoderBlock(64 + 32, 4*32)
         self.ske_deconv5 = nn.Sequential(
             nn.Conv2d(32 + 16, 32, 3, 1, 1),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(32, 1, 3, 1, 1),
             nn.Tanh(),
         )
@@ -345,9 +321,9 @@ class Generator(nn.Module):
 
         # self.colorConv = nn.Sequential(
         #     nn.Conv2d(32, 64, 3, 1, 1),
-        #     nn.LeakyReLU(0.2),
+        #     nn.LeakyReLU(0.2, inplace=True),
         #     nn.Conv2d(64, 64, 3, 1, 1),
-        #     nn.LeakyReLU(0.2),
+        #     nn.LeakyReLU(0.2, inplace=True),
         #     nn.Conv2d(64, 64, 3, 1, 1),
         #     nn.Tanh(),
         # )
@@ -355,11 +331,11 @@ class Generator(nn.Module):
         if net_opt['guide']:
             self.deconv_for_decoder = nn.Sequential(
                 nn.ConvTranspose2d(256, 128, 3, stride=2, padding=1, output_padding=1), # output is 64 * 64
-                nn.LeakyReLU(0.2),
+                nn.LeakyReLU(0.2, inplace=True),
                 nn.ConvTranspose2d(128, 64, 3, stride=2, padding=1, output_padding=1), # output is 128 * 128
-                nn.LeakyReLU(0.2),
+                nn.LeakyReLU(0.2, inplace=True),
                 nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1), # output is 256 * 256
-                nn.LeakyReLU(0.2),
+                nn.LeakyReLU(0.2, inplace=True),
                 nn.ConvTranspose2d(32, 3, 3, stride=1, padding=1, output_padding=0), # output is 256 * 256
                 nn.Tanh(),
             )
@@ -374,6 +350,18 @@ class Generator(nn.Module):
             if hasattr(m, 'bias') and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
+    def unrequire_seg_branch(self):
+        for i in self.ske_deconv1.parameters():
+            i.requires_grad = False
+        for i in self.ske_deconv2.parameters():
+            i.requires_grad = False
+        for i in self.ske_deconv3.parameters():
+            i.requires_grad = False
+        for i in self.ske_deconv4.parameters():
+            i.requires_grad = False
+        for i in self.ske_deconv5.parameters():
+            i.requires_grad = False
+
     def make_encoder_block(self, in_channels, out_channels, first=False):
         if first:
             stride = 1
@@ -382,12 +370,12 @@ class Generator(nn.Module):
 
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, 3, stride, 1),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(out_channels, out_channels, 3, 1, 1),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(0.2, inplace=True),
         )
 
-    def forward(self, input, feature_tensor, c_tag_class, link):
+    def forward(self, input, feature_tensor, c_tag_class, link, require=0): # 0: all, 1: main, 2: main, guide
         out1 = self.conv1(input)
         out2 = self.conv2(out1)
         out3 = self.conv3(out2)
@@ -438,8 +426,10 @@ class Generator(nn.Module):
         out1_ske = self.ske_deconv4(torch.cat([out2_ske, out2], 1))
         out1_prime = self.deconv4(torch.cat([out2_prime, out2_ske, out2], 1), c_se_tensor)
 
-        skeleton_output = self.ske_deconv5(torch.cat([out1_ske, out1], 1))
         full_output = self.deconv5(torch.cat([out1_prime, out1_ske, out1], 1))
+
+        if require == 1:
+            return full_output
 
         # ==============================
         # out4_prime should be input of Guide Decoder
@@ -448,6 +438,11 @@ class Generator(nn.Module):
             decoder_output = self.deconv_for_decoder(out4_prime)
         else:
             decoder_output = full_output
+
+        if require == 2:
+            return full_output, decoder_output
+
+        skeleton_output = self.ske_deconv5(torch.cat([out1_ske, out1], 1))
 
         return full_output, decoder_output, skeleton_output
 
@@ -463,9 +458,9 @@ class Discriminator(nn.Module):
 
         self.conv1 = nn.Sequential(
             nn.Conv2d(self.input_dim, 32, 3, 1, 1),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(32, 32, 3, 2, 0),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(0.2, inplace=True),
         )
         self.conv2 = self._make_block_1(32, 64)
         self.conv3 = self._make_block_1(64, 128)
@@ -505,7 +500,7 @@ class Discriminator(nn.Module):
         return nn.Sequential(
             SEResNeXt._make_layer(self, BottleneckX, planes//4, 2, inplanes=inplanes),
             nn.Conv2d(planes, planes, 3, 2, 1),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(0.2, inplace=True),
         )
 
     def _make_block_2(self, inplanes, planes):

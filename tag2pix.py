@@ -1,5 +1,4 @@
-from builtins import type
-import itertools, time, pickle, pprint
+import time
 from pathlib import Path
 
 import numpy as np
@@ -7,14 +6,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.autograd import grad
 from PIL import Image
 from tqdm import tqdm
 
 import utils
 from loader.dataloader import get_dataset, get_tag_dict, ColorSpace2RGB
 from network import Discriminator
-from model.se_resnet import BottleneckX, SEResNeXt
 from model.pretrained import pretrain_rgb2hsv, se_resnext_half, Vgg16
 
 from torch.utils.tensorboard import SummaryWriter
@@ -42,7 +39,6 @@ class tag2pix(object):
         self.epoch = args.epoch
         self.batch_size = args.batch_size
 
-        self.gpu_mode = not args.cpu
         self.input_size = args.input_size
         self.color_revert = ColorSpace2RGB(args.color_space)
         self.layers = args.layers
@@ -69,24 +65,26 @@ class tag2pix(object):
 
         self.start_epoch = 1
 
+        self.result_path = args.result_dir
+
+        self.device = torch.device('cuda', args.local_rank)
+        torch.cuda.set_device(args.local_rank)
+        torch.distributed.init_process_group(backend='nccl')
+
         #### load dataset
         if not args.test:
             self.train_data_loader, self.test_data_loader = get_dataset(args)
-            self.result_path = Path(args.result_dir) / time.strftime('%y%m%d-%H%M%S', time.localtime())
 
-            if not self.result_path.exists():
-                self.result_path.mkdir()
+            if self.args.local_rank == 0:
+                self.test_images = self.get_test_data(self.test_data_loader, args.test_image_count)
 
-            self.test_images = self.get_test_data(self.test_data_loader, args.test_image_count)
+                logger_path = self.result_path / "logger"
+                logger_path.mkdir(exist_ok=True)
 
-            logger_path = self.result_path / "logger"
-            if not logger_path.exists():
-                logger_path.mkdir()
-            self.logger = SummaryWriter(str(logger_path))
+                self.logger = SummaryWriter(str(logger_path))
 
         else:
             self.test_data_loader = get_dataset(args)
-            self.result_path = Path(args.result_dir)
 
 
         ##### initialize network
@@ -98,16 +96,25 @@ class tag2pix(object):
         }
 
         if self.net_opt['cit']:
-            self.Pretrain_ResNeXT = se_resnext_half(dump_path=args.pretrain_dump, num_classes=cit_class_num, input_channels=1)
+            self.ResNeXT = se_resnext_half(dump_path=args.pretrain_dump, num_classes=cit_class_num, input_channels=1)
         else:
-            self.Pretrain_ResNeXT = nn.Sequential()
+            self.ResNeXT = nn.Sequential()
+
+        self.rgb2hsv = pretrain_rgb2hsv()
+        self.vgg16 = Vgg16()
 
         self.G = Generator(input_size=args.input_size, layers=args.layers,
                 cv_class_num=cvt_class_num, iv_class_num=cit_class_num, net_opt=self.net_opt)
         self.D = Discriminator(input_dim=6, output_dim=1, input_size=self.input_size,
                 cv_class_num=cvt_class_num, iv_class_num=cit_class_num)
 
-        for param in self.Pretrain_ResNeXT.parameters():
+        self.ResNeXT.to(self.device)
+        self.G.to(self.device)
+        self.D.to(self.device)
+        self.rgb2hsv.to(self.device)
+        self.vgg16.to(self.device)
+
+        for param in self.ResNeXT.parameters():
             param.requires_grad = False
         if args.test:
             for param in self.G.parameters():
@@ -115,40 +122,17 @@ class tag2pix(object):
             for param in self.D.parameters():
                 param.requires_grad = False
 
-        self.Pretrain_ResNeXT = nn.DataParallel(self.Pretrain_ResNeXT)
-        self.G = nn.DataParallel(self.G)
-        self.D = nn.DataParallel(self.D)
-
         self.G_optimizer = optim.Adam(self.G.parameters(), lr=args.lrG, betas=(args.beta1, args.beta2))
         self.D_optimizer = optim.Adam(self.D.parameters(), lr=args.lrD, betas=(args.beta1, args.beta2))
 
-        self.BCE_loss = nn.BCELoss()
-        self.CE_loss = nn.CrossEntropyLoss()
-        self.L1Loss = nn.L1Loss()
+        self.G_hack = self.G
+        self.G = torch.nn.parallel.DistributedDataParallel(self.G, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True, broadcast_buffers=False)
+        self.D = torch.nn.parallel.DistributedDataParallel(self.D, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True, broadcast_buffers=False)
 
-        self.rgb2hsv = pretrain_rgb2hsv()
-        self.vgg16 = nn.DataParallel(Vgg16())
-
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        print("gpu mode: ", self.gpu_mode)
         print("device: ", self.device)
-        print(torch.cuda.device_count(), "GPUS!")
-
-        if self.gpu_mode:
-            self.Pretrain_ResNeXT.to(self.device)
-            self.G.to(self.device)
-            self.D.to(self.device)
-            self.BCE_loss.to(self.device)
-            self.CE_loss.to(self.device)
-            self.L1Loss.to(self.device)
-            self.rgb2hsv.to(self.device)
-            self.vgg16.to(self.device)
 
     def train(self):
-        self.y_real_, self.y_fake_ = torch.ones(self.batch_size, 1), torch.zeros(self.batch_size, 1)
-
-        if self.gpu_mode:
-            self.y_real_, self.y_fake_ = self.y_real_.to(self.device), self.y_fake_.to(self.device)
+        self.y_real_, self.y_fake_ = torch.ones(self.batch_size, 1).to(self.device), torch.zeros(self.batch_size, 1).to(self.device)
 
         if self.load_dump:
             self.load(self.load_path)
@@ -156,15 +140,21 @@ class tag2pix(object):
         else:
             self.end_epoch = self.epoch
 
-        self.print_params()
+        if self.args.local_rank == 0:
+            self.print_params()
+            print('training start!!')
 
         self.D.train()
-        print('training start!!')
 
         for epoch in range(self.start_epoch, self.end_epoch + 1):
-            print("EPOCH: {}".format(epoch))
+            if self.args.local_rank == 0:
+                print("EPOCH: {}".format(epoch))
 
             self.G.train()
+
+            if epoch == self.args.seg_epoch:
+                self.G_hack.unrequire_seg_branch();
+                self.G_optimizer = optim.Adam(filter(lambda p: p.requires_grad, self.G.parameters()), lr=self.args.lrG, betas=(self.args.beta1, self.args.beta2))
 
             if epoch == self.brightness_epoch:
                 print('changing brightness ...')
@@ -176,45 +166,39 @@ class tag2pix(object):
                 if iter >= max_iter:
                     break
 
-                if self.gpu_mode:
-                    sketch_, original_, skeleton_, iv_tag_, cv_tag_, link_ = \
-                        sketch_.to(self.device), original_.to(self.device), skeleton_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device), link_.to(self.device)
+                sketch_, original_, skeleton_, iv_tag_, cv_tag_, link_ = sketch_.to(self.device), original_.to(self.device), skeleton_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device), link_.to(self.device)
 
                 # update D network
                 self.D_optimizer.zero_grad()
 
                 with torch.no_grad():
-                    feature_tensor = self.Pretrain_ResNeXT(sketch_)
-                if self.gpu_mode:
-                    feature_tensor = feature_tensor.to(self.device)
+                    feature_tensor = self.ResNeXT(sketch_)
 
                 hsv_t = self.rgb2hsv(original_)
                 gt = torch.cat([original_, hsv_t], 1)
 
                 D_real, CIT_real, CVT_real = self.D(gt)
-                D_real_loss = self.BCE_loss(D_real, self.y_real_)
+                D_real_loss = F.binary_cross_entropy(D_real, self.y_real_)
 
-                G_f, _, _ = self.G(sketch_, feature_tensor, cv_tag_, link_)
+                G_f = self.G(sketch_, feature_tensor, cv_tag_, link_, 1)
                 hsv_f = self.rgb2hsv(G_f)
-                if self.gpu_mode:
-                    G_f, hsv_f = G_f.to(self.device), hsv_f.to(self.device)
 
                 G_f = torch.cat([G_f, hsv_f], 1)
 
                 D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
-                D_f_fake_loss = self.BCE_loss(D_f_fake, self.y_fake_)
+                D_f_fake_loss = F.binary_cross_entropy(D_f_fake, self.y_fake_)
 
                 cv_and_link = link_
                 # cv_and_link = torch.cat((cv_tag_, link_), 1)
 
                 if self.two_step_epoch == 0 or epoch >= self.two_step_epoch:
-                    CIT_real_loss = self.BCE_loss(CIT_real, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_real_loss = self.BCE_loss(CVT_real, cv_and_link)
+                    CIT_real_loss = F.binary_cross_entropy(CIT_real, iv_tag_) if self.net_opt['cit'] else 0
+                    CVT_real_loss = F.binary_cross_entropy(CVT_real, cv_and_link)
 
                     C_real_loss = self.cvt_weight * CVT_real_loss + self.cit_weight * CIT_real_loss
 
-                    CIT_f_fake_loss = self.BCE_loss(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_f_fake_loss = self.BCE_loss(CVT_f_fake, cv_and_link)
+                    CIT_f_fake_loss = F.binary_cross_entropy(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
+                    CVT_f_fake_loss = F.binary_cross_entropy(CVT_f_fake, cv_and_link)
 
                     C_f_fake_loss = self.cvt_weight * CVT_f_fake_loss + self.cit_weight * CIT_f_fake_loss
                 else:
@@ -229,10 +213,11 @@ class tag2pix(object):
                 # update G network
                 self.G_optimizer.zero_grad()
 
-                G_f, G_g, G_s = self.G(sketch_, feature_tensor, cv_tag_, link_)
-
-                if self.gpu_mode:
-                    G_f, G_g = G_f.to(self.device), G_g.to(self.device)
+                if epoch >= self.args.seg_epoch:
+                    G_f, G_g = self.G(sketch_, feature_tensor, cv_tag_, link_, 2)
+                else:
+                    G_f, G_g, G_s = self.G(sketch_, feature_tensor, cv_tag_, link_)
+                    skeleton_l1 = F.l1_loss(G_s, skeleton_)
 
                 perceptual_g, perceptual_gt = self.vgg16(G_f), self.vgg16(original_)
                 perceptual_g, perceptual_gt = perceptual_g.to(self.device), perceptual_gt.to(self.device)
@@ -241,69 +226,73 @@ class tag2pix(object):
 
                 hsv_fake, hsv_real = self.rgb2hsv(G_f), self.rgb2hsv(original_)
 
-                if self.gpu_mode:
-                    hsv_fake, hsv_real = hsv_fake.to(self.device), hsv_real.to(self.device)
-
                 hsv_l1 = F.l1_loss(hsv_fake, hsv_real)
-                skeleton_l1 = F.l1_loss(G_s, skeleton_)
 
                 G_f = torch.cat([G_f, hsv_fake], 1)
                 D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
 
-                D_f_fake_loss = self.BCE_loss(D_f_fake, self.y_real_)
+                D_f_fake_loss = F.binary_cross_entropy(D_f_fake, self.y_real_)
 
                 step = (epoch - 1) * max_iter + iter
 
                 if self.two_step_epoch == 0 or epoch >= self.two_step_epoch:
-                    CIT_f_fake_loss = self.BCE_loss(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_f_fake_loss = self.BCE_loss(CVT_f_fake, cv_and_link)
+                    CIT_f_fake_loss = F.binary_cross_entropy(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
+                    CVT_f_fake_loss = F.binary_cross_entropy(CVT_f_fake, cv_and_link)
 
                     C_f_fake_loss = self.cvt_weight * CVT_f_fake_loss + self.cit_weight * CIT_f_fake_loss
 
-                    self.logger.add_scalar("CIT_f_fake_loss", CIT_f_fake_loss.item(), step)
-                    self.logger.add_scalar("CVT_f_fake_loss", CVT_f_fake_loss.item(), step)
+                    if self.args.local_rank == 0:
+                        self.logger.add_scalar("CIT_f_fake_loss", CIT_f_fake_loss.item(), step)
+                        self.logger.add_scalar("CVT_f_fake_loss", CVT_f_fake_loss.item(), step)
                 else:
                     C_f_fake_loss = 0
 
                 # L1_D_f_fake_loss = self.L1Loss(G_f, original_)
-                L1_D_g_fake_loss = self.L1Loss(G_g, original_) if self.net_opt['guide'] else 0
+                L1_D_g_fake_loss = F.l1_loss(G_g, original_) if self.net_opt['guide'] else 0
 
                 # G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + L1_D_f_fake_loss + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
-                G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + skeleton_l1 + perceptual + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
+
+                if epoch >= self.args.seg_epoch:
+                    G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + perceptual + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
+                else:
+                    G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + skeleton_l1 + perceptual + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
 
                 G_loss.backward()
                 self.G_optimizer.step()
 
-                # self.logger.add_scalar("L1", L1_D_f_fake_loss.item(), step)
-                self.logger.add_scalar("L1_HSV", hsv_l1.item(), step)
-                self.logger.add_scalar("L1_skeleton", hsv_l1.item(), step)
-                self.logger.add_scalar("guide", L1_D_g_fake_loss.item(), step)
-                self.logger.add_scalar("D_f_fake_loss", D_f_fake_loss.item(), step)
-                self.logger.add_scalar("G_loss", G_loss.item(), step)
-                self.logger.add_scalar("perceptual", perceptual.item(), step)
+                if self.args.local_rank == 0:
+                    # self.logger.add_scalar("L1", L1_D_f_fake_loss.item(), step)
+                    self.logger.add_scalar("L1_HSV", hsv_l1.item(), step)
+                    self.logger.add_scalar("L1_skeleton", hsv_l1.item(), step)
+                    self.logger.add_scalar("guide", L1_D_g_fake_loss.item(), step)
+                    self.logger.add_scalar("D_f_fake_loss", D_f_fake_loss.item(), step)
+                    self.logger.add_scalar("G_loss", G_loss.item(), step)
+                    self.logger.add_scalar("perceptual", perceptual.item(), step)
 
-                if epoch == 1 and iter == 100:
-                    self.visualize_results(epoch)
-
-                if ((iter + 1) % 500) == 0:
+                if self.args.local_rank == 0 and epoch == 1 and iter == 100:
                     with torch.no_grad():
                         self.visualize_results(epoch)
-                    print("Epoch: [{:2d}] [{:4d}/{:4d}] D_loss: {:.8f}, G_loss: {:.8f}".format(
-                        epoch, (iter + 1), max_iter, D_loss.item(), G_loss.item()))
 
-            with torch.no_grad():
-                self.visualize_results(epoch)
+                if self.args.local_rank == 0 and (iter + 1) % 500 == 0:
+                    with torch.no_grad():
+                        self.visualize_results(epoch)
+                    print("Epoch: [{:2d}] [{:4d}/{:4d}] D_loss: {:.8f}, G_loss: {:.8f}".format(epoch, (iter + 1), max_iter, D_loss.item(), G_loss.item()))
 
-            if epoch >= self.save_all_epoch > 0:
-                self.save(epoch)
-            elif self.save_freq > 0 and epoch % self.save_freq == 0:
-                self.save(epoch)
+            if self.args.local_rank == 0:
+                with torch.no_grad():
+                    self.visualize_results(epoch)
 
-        print("Training finish!... save training results")
+                if epoch >= self.save_all_epoch > 0:
+                    self.save(epoch)
+                elif self.save_freq > 0 and epoch % self.save_freq == 0:
+                    self.save(epoch)
 
-        if self.save_freq == 0 or epoch % self.save_freq != 0:
-            if self.save_all_epoch <= 0 or epoch < self.save_all_epoch:
-                self.save(epoch)
+        if self.args.local_rank == 0:
+            print("Training finish!... save training results")
+
+            if self.save_freq == 0 or epoch % self.save_freq != 0:
+                if self.save_all_epoch <= 0 or epoch < self.save_all_epoch:
+                    self.save(epoch)
 
     def test(self):
         self.load_test(self.args.load)
@@ -314,21 +303,16 @@ class tag2pix(object):
         load_path = self.load_path
         result_path = self.result_path / load_path.stem
 
-        if not result_path.exists():
-            result_path.mkdir()
+        result_path.mkdir(exist_ok=True)
 
         with torch.no_grad():
             for sketch_, index_, _, cv_tag_, link_ in tqdm(self.test_data_loader, ncols=80):
-                if self.gpu_mode:
-                    sketch_, cv_tag_, link_ = sketch_.to(self.device), cv_tag_.to(self.device), link_.to(self.device)
+                sketch_, cv_tag_, link_ = sketch_.to(self.device), cv_tag_.to(self.device), link_.to(self.device)
 
                 with torch.no_grad():
-                    feature_tensor = self.Pretrain_ResNeXT(sketch_)
+                    feature_tensor = self.ResNeXT(sketch_)
 
-                if self.gpu_mode:
-                    feature_tensor = feature_tensor.to(self.device)
-
-                G_f, _, _ = self.G(sketch_, feature_tensor, cv_tag_, link_)
+                G_f = self.G(sketch_, feature_tensor, cv_tag_, link_, 1)
                 G_f = self.color_revert(G_f.cpu())
 
                 for ind, result in zip(index_.cpu().numpy(), G_f):
@@ -353,22 +337,15 @@ class tag2pix(object):
 
         # iv_tag_ to feature tensor 16 * 16 * 256 by pre-reained Sketch.
         with torch.no_grad():
-            feature_tensor = self.Pretrain_ResNeXT(sketch_)
+            original_, sketch_, iv_tag_, cv_tag_, link_ = original_.to(self.device), sketch_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device), link_.to(self.device)
 
-            if self.gpu_mode:
-                original_, sketch_, iv_tag_, cv_tag_, feature_tensor, link_ = \
-                    original_.to(self.device), sketch_.to(self.device), iv_tag_.to(self.device), cv_tag_.to(self.device), feature_tensor.to(self.device), link_.to(self.device)
+            feature_tensor = self.ResNeXT(sketch_)
 
             G_f, G_g, G_s = self.G(sketch_, feature_tensor, cv_tag_, link_)
 
-            if self.gpu_mode:
-                G_f = G_f.cpu()
-                G_g = G_g.cpu()
-                G_s = G_s.cpu()
-
-            G_f = self.color_revert(G_f)
-            G_g = self.color_revert(G_g)
-            G_s = self.color_revert(G_s)
+            G_f = self.color_revert(G_f.cpu())
+            G_g = self.color_revert(G_g.cpu())
+            G_s = self.color_revert(G_s.cpu())
 
         utils.save_images(G_f[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim],
                           self.result_path / 'tag2pix_epoch{:03d}_G_f.png'.format(epoch))
@@ -378,33 +355,25 @@ class tag2pix(object):
                           self.result_path / 'tag2pix_epoch{:03d}_G_s.png'.format(epoch))
 
     def save(self, save_epoch):
-        if not self.result_path.exists():
-            self.result_path.mkdir()
-
-        with (self.result_path / 'arguments.txt').open('w') as f:
-            f.write(pprint.pformat(self.args.__dict__))
-
-        save_dir = self.result_path
-
         torch.save({
             'G' : self.G.state_dict(),
             'D' : self.D.state_dict(),
             'G_optimizer' : self.G_optimizer.state_dict(),
             'D_optimizer' : self.D_optimizer.state_dict(),
             'finish_epoch' : save_epoch,
-            'result_path' : str(save_dir)
-            }, str(save_dir / 'tag2pix_{}_epoch.pkl'.format(save_epoch)))
+            'result_path' : str(self.result_path)
+            }, str(self.result_path / 'tag2pix_{}_epoch.pkl'.format(save_epoch)))
 
         print("============= save success =============")
         print("epoch from {} to {}".format(self.start_epoch, save_epoch))
         print("save result path is {}".format(str(self.result_path)))
 
     def load_test(self, checkpoint_path):
-        checkpoint = torch.load(str(checkpoint_path))
+        checkpoint = torch.load(str(checkpoint_path), map_location=torch.device("cpu"))
         self.G.load_state_dict(checkpoint['G'])
 
     def load(self, checkpoint_path):
-        checkpoint = torch.load(str(checkpoint_path))
+        checkpoint = torch.load(str(checkpoint_path), map_location=torch.device("cpu"))
         self.G.load_state_dict(checkpoint['G'])
         self.D.load_state_dict(checkpoint['D'])
         self.G_optimizer.load_state_dict(checkpoint['G_optimizer'])
@@ -438,19 +407,16 @@ class tag2pix(object):
         cv_tag_ = torch.cat(cv_tag_, 0)
         link_ = torch.cat(link_, 0)
 
-        self.save_tag_tensor_name(iv_tag_, cv_tag_, self.result_path / "test_image_tags.txt")
-
         image_frame_dim = int(np.ceil(np.sqrt(len(original_))))
 
-        if self.gpu_mode:
-            original_ = original_.cpu()
+        original_ = original_.cpu()
         sketch_np = sketch_.data.numpy().transpose(0, 2, 3, 1)
         original_np = self.color_revert(original_)
 
-        utils.save_images(original_np[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim],
-                        self.result_path / 'tag2pix_original.png')
-        utils.save_images(sketch_np[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim],
-                        self.result_path / 'tag2pix_sketch.png')
+        if self.args.local_rank == 0:
+            self.save_tag_tensor_name(iv_tag_, cv_tag_, self.result_path / "test_image_tags.txt")
+            utils.save_images(original_np[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim], self.result_path / 'tag2pix_original.png')
+            utils.save_images(sketch_np[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim], self.result_path / 'tag2pix_sketch.png')
 
         return original_, sketch_, iv_tag_, cv_tag_, link_
 
@@ -493,6 +459,6 @@ class tag2pix(object):
             params_cnt[0] += param.numel()
         for param in self.D.parameters():
             params_cnt[1] += param.numel()
-        for param in self.Pretrain_ResNeXT.parameters():
+        for param in self.ResNeXT.parameters():
             params_cnt[2] += param.numel()
         print(f'Parameter #: G - {params_cnt[0]} / D - {params_cnt[1]} / Pretrain - {params_cnt[2]}')

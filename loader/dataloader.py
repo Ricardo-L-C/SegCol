@@ -11,22 +11,11 @@ from torch import tensor
 from torchvision import transforms
 from torchvision.transforms import functional as tvF
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data.dataset import Dataset  # For custom datasets
 
 from torchvision.transforms import InterpolationMode
 
-def set_seed(seed, print_log=True):
-    if seed < 0:
-        return
-    if print_log:
-        print('set random seed: {}'.format(seed))
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 def pseudo_uniform(id, a, b):
     return (((id * 1.253 + a * 324.2351 + b * 534.342) * 20147.2312369804) + 0.12949) % (b - a) + a
@@ -320,8 +309,6 @@ class RandomFRC(transforms.RandomResizedCrop):
                 tvF.resized_crop(img2, i, j, h, w, self.size, self.interpolation))
 
 def get_train_dataset(args):
-    set_seed(args.seed)
-
     data_dir_path = Path(args.data_dir)
 
     batch_size = args.batch_size
@@ -352,11 +339,6 @@ def get_train_dataset(args):
     (train_id_list, train_iv_class_list, train_cv_class_list, link_list) = read_tagline_txt(
         tag_path, rgb_train_path, iv_dict, cv_dict, data_size=data_size, is_train=True, seed=args.seed)
 
-    if platform.system() == 'Windows':
-        _init_fn = None
-    else:
-        _init_fn = lambda worker_id: set_seed(args.seed, print_log=False)
-
     train = ColorAndSketchDataset(rgb_path=rgb_train_path, sketch_path_list=sketch_dir_path_list,
         file_id_list=train_id_list, iv_class_list=train_iv_class_list, cv_class_list=train_cv_class_list, link_list=link_list,
         override_len=data_size, both_transform=None, #data_randomize,
@@ -364,7 +346,9 @@ def get_train_dataset(args):
         color_transform=transforms.Compose(data_augmentation + swap_color_space),
         seed=args.seed, link=args.link_color)
 
-    train_loader = DataLoader(train, batch_size=batch_size, shuffle=True, num_workers=args.thread, worker_init_fn=_init_fn)
+    train_sampler =  DistributedSampler(train)
+
+    train_loader = DataLoader(train, batch_size=batch_size, sampler=train_sampler, num_workers=args.num_workers, drop_last=True, pin_memory=True)
 
     print(f'iv_class_len={iv_class_len}, cv_class_len={cv_class_len}')
     print(f'train: read {sketch_dir_path_list[0]}, id_list len={len(train_id_list)}, iv_class len={len(train_iv_class_list)}, cv_class len={len(train_cv_class_list)}')
@@ -386,7 +370,7 @@ def get_train_dataset(args):
         color_transform=transforms.Compose(data_augmentation + swap_color_space),
         link=args.link_color)
 
-    test_loader = DataLoader(test, batch_size=batch_size, shuffle=False, num_workers=args.thread, worker_init_fn=_init_fn)
+    test_loader = DataLoader(test, batch_size=batch_size, num_workers=args.num_workers, drop_last=True, pin_memory=True)
 
     print(f'test: read {sketch_test_path}, id_list len={len(test_id_list)}, iv_class len={len(test_iv_class_list)}, cv_class len={len(test_cv_class_list)}')
 

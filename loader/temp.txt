@@ -1,0 +1,52 @@
+[613194, 613209, 613197, 613195, 613208, 613207, 613200, 613205, 659098, 1303252, 1288957, 683385, 1293269, 374791, 16718, 374628, 428173, 503552, 515302, 520398, 520397, 613885, 616524, 498950, 219401, 376766, 524961, 390594, 397327, 514515, 474820, 486611, 435433, 1401711, 1441865, 1403814, 1402579, 1441874, 547860, 471601, 463127, 456585, 14620, 39127, 377140, 389777, 166531, 390596, 166757, 390401, 401289, 474500, 498000, 477288, 520991, 71730, 494744, 446647, 391297, 378561, 426936, 374620, 460324, 3389, 10959, 8526, 16578, 10960, 15654, 89189, 16750, 13199, 89368, 95405, 89228, 390186, 1373022, 1373029, 87788, 16867, 13200, 10953, 16442, 11429, 15425, 8388, 5403, 16581, 87676, 16580, 94007, 403081, 468534, 476134, 538901, 470807, 546609, 701697, 563256, 463115, 1247160, 615165, 515193, 632214, 580545, 584749, 531371, 593298, 569748, 593297, 593296, 646879, 643898, 645753, 684986]
+
+["black_legwear", "white_legwear", "brown_legwear", "blue_legwear", "red_legwear", "purple_legwear", "grey_legwear", "pink_legwear", "black_footwear", "brown_footwear", "white_footwear", "red_footwear", "blue_footwear", "white_panties", "black_panties", "black_skirt", "blue_skirt", "red_skirt", "green_skirt", "white_skirt", "pink_skirt", "brown_skirt", "grey_skirt", "orange_skirt", "white_shirt", "black_shirt", "red_shirt", "blue_shirt", "pink_shirt", "black_gloves", "brown_gloves", "red_gloves", "red_neckwear", "black_neckwear", "blue_neckwear", "green_neckwear", "yellow_neckwear", "black_jacket", "black_bra", "white_bra", "pink_bra", "white_dress", "black_dress", "blue_dress", "red_dress", "pink_dress", "purple_dress", "green_dress", "red_ribbon", "yellow_ribbon", "black_ribbon", "blue_ribbon", "white_ribbon", "pink_ribbon", "dark_skin", "shiny_skin", "pale_skin", "white_skin", "blue_skin", "white_bikini", "black_bikini", "red_bikini", "blue_eyes", "red_eyes", "brown_eyes", "green_eyes", "purple_eyes", "yellow_eyes", "pink_eyes", "black_eyes", "aqua_eyes", "orange_eyes", "grey_eyes", "silver_eyes", "lavender_eyes","white_eyes", "red-framed_eyewear", "black-framed_eyewear", "blonde_hair", "brown_hair", "black_hair", "blue_hair", "purple_hair", "pink_hair", "silver_hair", "green_hair", "red_hair", "white_hair", "orange_hair", "grey_hair", "aqua_hair", "lavender_hair", "light_brown_hair","gradient_hair", "shiny_hair", "black_hat", "white_hat", "red_bow", "blue_bow", "white_bow", "yellow_bow", "pink_bow", "black_bow", "green_bow", "white_background", "grey_background", "blue_background", "pink_background", "gradient_background", "yellow_background", "black_background", "green_background", "red_background", "brown_background", "purple_background", "orange_background", "beige_background"]
+
+to delete
+219401 denim
+3389 blush
+
+
+{'black': 17, 'white': 14, 'brown': 7, 'blue': 12, 'red': 13, 'purple': 5, 'grey': 5, 'pink': 10, 'green': 7, 'orange': 4, 'yellow': 5, 'dark': 1, 'shiny': 1, 'pale': 1, 'aqua': 2, 'silver': 2, 'red-framed': 1, 'black-framed': 1, 'blonde': 1, 'lavender': 1, 'lightbrown': 1, 'gradient': 1, 'beige': 1}
+
+sorted
+['black', 'white', 'red', 'blue', 'pink', 'green', 'brown', 'grey', 'yellow', 'purple', 'orange', 'silver', 'aqua', 'gradient', 'shiny', 'pale', 'lavender', 'lightbrown', 'dark', 'beige', 'black-framed', 'red-framed', 'blonde']
+
+['legwear', 'legwear', 'legwear', 'legwear', 'legwear', 'legwear', 'legwear', 'legwear', 'footwear', 'footwear', 'footwear', 'footwear', 'footwear', 'panties', 'panties', 'skirt', 'skirt', 'skirt', 'skirt', 'skirt', 'skirt', 'skirt', 'skirt', 'skirt', 'shirt', 'shirt', 'shirt', 'shirt', 'shirt', 'gloves', 'gloves', 'gloves', 'neckwear', 'neckwear', 'neckwear', 'neckwear', 'neckwear', 'jacket', 'bra', 'bra', 'bra', 'dress', 'dress', 'dress', 'dress', 'dress', 'dress', 'dress', 'ribbon', 'ribbon', 'ribbon', 'ribbon', 'ribbon', 'ribbon', 'skin', 'skin', 'skin', 'skin', 'skin', 'bikini', 'bikini', 'bikini', 'eyes', 'eyes', 'eyes', 'eyes', 'eyes', 'eyes', 'eyes', 'eyes', 'eyes', 'eyes', 'eyes', 'eyes', 'eyewear', 'eyewear', 'hair', 'hair', 'hair', 'hair', 'hair', 'hair', 'hair', 'hair', 'hair', 'hair', 'hair', 'hair', 'hair', 'hair', 'hair', 'hat', 'hat', 'bow', 'bow', 'bow', 'bow', 'bow', 'bow', 'bow', 'background', 'background', 'background', 'background', 'background', 'background', 'background', 'background', 'background', 'background', 'background', 'background', 'background']
+
+{'legwear': 8, 'footwear': 5, 'panties': 2, 'skirt': 9, 'shirt': 5, 'gloves': 3, 'neckwear': 5, 'jacket': 1, 'bra': 3, 'dress': 7, 'ribbon': 6, 'skin': 5, 'bikini': 3, 'eyes': 12, 'eyewear': 2, 'hair': 15, 'hat': 2, 'bow': 7, 'background': 13}
+
+sorted
+['hair', 'background', 'eyes', 'skirt', 'legwear', 'bow', 'dress', 'ribbon', 'shirt', 'skin', 'footwear', 'neckwear', 'bikini', 'bra', 'gloves', 'panties', 'eyewear', 'hat', 'jacket']
+
+
+23*19
+[
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1],
+    [1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+]
+
+{"613194": 4, "613209": 23, "613197": 118, "613195": 61, "613208": 42, "613207": 175, "613200": 137, "613205": 80, "659098": 10, "1303252": 124, "1288957": 29, "683385": 48, "1293269": 67, "374791": 34, "16718": 15, "374628": 3, "428173": 60, "503552": 41, "515302": 98, "520398": 22, "520397": 79, "613885": 117, "616524": 136, "498950": 193, "376766": 27, "524961": 8, "390594": 46, "397327": 65, "514515": 84, "474820": 14, "486611": 128, "435433": 52, "1401711": 49, "1441865": 11, "1403814": 68, "1402579": 106, "1441874": 163, "547860": 18, "471601": 13, "463127": 32, "456585": 89, "14620": 25, "39127": 6, "377140": 63, "389777": 44, "166531": 82, "390596": 177, "166757": 101, "390401": 45, "401289": 159, "474500": 7, "498000": 64, "477288": 26, "520991": 83, "71730": 351, "494744": 275, "446647": 294, "391297": 28, "378561": 66, "426936": 31, "374620": 12, "460324": 50, "10959": 59, "8526": 40, "16578": 116, "10960": 97, "15654": 173, "89189": 154, "16750": 78, "13199": 2, "89368": 230, "95405": 192, "89228": 135, "390186": 211, "1373022": 415, "1373029": 396, "87788": 418, "16867": 114, "13200": 0, "10953": 57, "16442": 171, "11429": 76, "15425": 209, "8388": 95, "5403": 38, "16581": 19, "87676": 190, "16580": 133, "94007": 228, "403081": 304, "468534": 323, "476134": 17, "538901": 36, "470807": 43, "546609": 62, "701697": 24, "563256": 157, "463115": 81, "1247160": 5, "615165": 100, "515193": 20, "632214": 134, "580545": 58, "584749": 77, "531371": 248, "593298": 153, "569748": 1, "593297": 96, "593296": 39, "646879": 115, "643898": 172, "645753": 191, "684986": 362}
+
+
