@@ -96,10 +96,9 @@ if __name__=="__main__":
     desc = "Seg colorization sketch extractor"
     parser = argparse.ArgumentParser(description=desc)
 
-    parser.add_argument("--dataset_path", type=Path, default="./dataset", help="path to dataset directory")
+    parser.add_argument("--dataset", type=Path, default="./dataset", help="path to dataset directory")
     parser.add_argument("--xdog_only", action="store_true")
     parser.add_argument("--keras_only", action="store_true")
-    parser.add_argument("--no_upscale", action="store_true", help="do not upscale keras_train")
 
     args = parser.parse_args()
 

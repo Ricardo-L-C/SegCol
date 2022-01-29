@@ -125,7 +125,7 @@ if __name__=="__main__":
     desc = "Seg colorization crop and upscale"
     parser = argparse.ArgumentParser(description=desc)
 
-    parser.add_argument("--dataset_path", type=Path, default="./dataset", help="path to dataset directory")
+    parser.add_argument("--dataset", type=Path, default="./dataset", help="path to dataset directory")
     parser.add_argument("--crop_only", action="store_true", help="only makes cropped image")
     parser.add_argument("--upscale_only", action="store_true", help="only makes upscaled image")
 
