@@ -131,10 +131,8 @@ if __name__=="__main__":
 
     args = parser.parse_args()
 
-    dataset_path = Path(args.dataset_path)
-
     if not args.upscale_only:
-        crop_all(dataset_path)
+        crop_all(args.dataset_path)
     if not args.crop_only:
-        upscale_all(dataset_path)
+        upscale_all(args.dataset_path)
 
