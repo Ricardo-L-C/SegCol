@@ -65,40 +65,40 @@ def crop_all(dataset_path):
 
     print("cropping train_image_base...")
     for f in tqdm(train_base.iterdir()):
-        file_id = int(f.stem)
-        if file_id not in resolutions:
-            print(f"{file_id} not found in resolutions.json")
+        id = f.stem
+        if id not in resolutions:
+            print(f"{id} not found in resolutions.json")
             shutil.copy2(f, unknow_resolution)
             continue
 
-        w, h = resolutions[file_id]
+        w, h = resolutions[id]
 
         img = cv2.imread(str(f), cv2.IMREAD_COLOR)
         cropped_img = make_square_by_mirror(img, h, w)
-        cv2.imwrite(str(save_train / (f.with_suffix(".png"))), cropped_img)
+        cv2.imwrite(str(save_train / (f.stem + ".png")), cropped_img)
 
     print("cropping liner_test...")
     for f in tqdm(test_base.iterdir()):
-        file_id = int(f.stem)
-        if file_id not in resolutions:
-            print(f"{file_id} not found in resolutions.json")
+        id = f.stem
+        if id not in resolutions:
+            print(f"{id} not found in resolutions.json")
             w, h = 512, 512
         else:
-            w, h = resolutions[file_id]
+            w, h = resolutions[id]
 
         img = cv2.imread(str(f), cv2.IMREAD_COLOR)
         cropped_img = make_square_by_mirror(img, h, w)
-        cv2.imwrite(str(save_test / (f.with_suffix(".png"))), cropped_img)
+        cv2.imwrite(str(save_test / (f.stem + ".png")), cropped_img)
 
     benchmark_dir = dataset_path / "benchmark"
     benchmark_dir.mkdir(exist_ok=True)
 
-    img_list = random.sample(save_train.iterdir(), 256)
+    img_list = random.sample(list(save_train.iterdir()), 256)
     for f in img_list:
         shutil.move(f, benchmark_dir / f.name)
 
-    shutil.rmtree(train_base)
-    shutil.rmtree(test_base)
+    # shutil.rmtree(train_base)
+    # shutil.rmtree(test_base)
 
 
 def upscale_lanczos_all(image_base, save_path):
@@ -132,7 +132,7 @@ if __name__=="__main__":
     args = parser.parse_args()
 
     if not args.upscale_only:
-        crop_all(args.dataset_path)
+        crop_all(args.dataset)
     if not args.crop_only:
-        upscale_all(args.dataset_path)
+        upscale_all(args.dataset)
 

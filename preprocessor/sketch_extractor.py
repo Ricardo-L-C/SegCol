@@ -40,7 +40,7 @@ def download_sketchKeras():
 def chunks(l, n):
     """Yield successive n-sized chunks from l."""
     for i in range(0, len(l), n):
-        yield l[i:i + n]
+        yield l[i: i + n]
 
 
 def xdog_write(path_img):
@@ -61,7 +61,7 @@ def exec_keras(dataset_path):
     download_sketchKeras()
 
     print("Extracting sketchKeras of rgb_train")
-    img_list = (dataset_path / "rgb_train").iterdir()
+    img_list = list((dataset_path / "rgb_train").iterdir())
     for img_16 in tqdm(chunks(img_list, 16)):
         imgs = list(map(lambda x: cv2.imread(str(x)), img_16))
         krs = batch_keras_enhanced(imgs)
@@ -71,7 +71,7 @@ def exec_keras(dataset_path):
             cv2.imwrite(str(keras_path / p.name), sketch)
 
     print("Extracting sketchKeras of benchmark")
-    bench_list = (dataset_path / "benchmark").iterdir()
+    bench_list = list((dataset_path / "benchmark").iterdir())
     for img_16 in tqdm(chunks(bench_list, 16)):
         imgs = list(map(lambda x: cv2.imread(str(x)), img_16))
         krs = batch_keras_enhanced(imgs)
@@ -103,7 +103,7 @@ if __name__=="__main__":
     args = parser.parse_args()
 
     if not args.xdog_only:
-        exec_keras(args.dataset_path)
+        exec_keras(args.dataset)
 
     if not args.keras_only:
-        exec_xdog(args.dataset_path)
+        exec_xdog(args.dataset)

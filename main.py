@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument("--epoch", type=int, default=50, help="The number of epochs to run")
     parser.add_argument("--save_all_epoch", type=int, default=0, help="If nonzero, save network dump by every epoch after this epoch")
 
-    parser.add_argument("--batch_size", type=int, default=16, help="Single batch size")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size for single GPU")
     parser.add_argument("--input_size", type=int, default=256, help="Width / Height of input image (must be rectangular)")
     parser.add_argument("--data_size", default=0, type=int, help="Total training image count. if 0, use all train data")
     parser.add_argument("--test_image_count", type=int, default=64, help="Total count of colorizing test images")
@@ -44,8 +44,8 @@ def parse_args():
     parser.add_argument("--tag_dump", type=Path, default=tag_dump_path, help="Path of tag dictionary / metadata pickle file.")
     parser.add_argument("--load", type=str, default="", help="Path to load network weights (if non-empty)")
 
-    parser.add_argument("--lrG", type=float, default=0.0002, help="Learning rate of tag2pix generator")
-    parser.add_argument("--lrD", type=float, default=0.0002, help="Learning rate of tag2pix discriminator")
+    parser.add_argument("--lrG", type=float, default=0.0002, help="Learning rate of generator")
+    parser.add_argument("--lrD", type=float, default=0.0002, help="Learning rate of discriminator")
     parser.add_argument("--l1_lambda", type=float, default=1000, help="Coefficient of content loss")
     parser.add_argument("--guide_beta", type=float, default=0.9, help="Coefficient of guide decoder")
     parser.add_argument("--adv_lambda", type=float, default=1, help="Coefficient of adversarial loss")
@@ -57,7 +57,7 @@ def parse_args():
 
     parser.add_argument("--cit_cvt_weight", type=float, nargs="+", default=[1, 1], help="CIT CVT Loss weight. space-separated")
     parser.add_argument("--two_step_epoch", type=int, default=0, help="If nonzero, apply two-step train. (start_epoch to args.auto_two_step_epoch: cit_cvt_weight==[0, 0], after: --cit_cvt_weight)")
-    parser.add_argument("--brightness_epoch", type=int, default=0, help="If nonzero, control brightness after this epoch (see Section 4.3.3)" + "(start_epoch to bright_down_epoch: ColorJitter.brightness == 0.2, after: [1, 7])")
+    parser.add_argument("--brightness_epoch", type=int, default=0, help="If nonzero, control brightness after this epoch (see Section 4.3.3) (start_epoch to bright_down_epoch: ColorJitter.brightness == 0.2, after: [1, 7])")
     parser.add_argument("--seg_epoch", type=int, default=20, help="Train epoch of segmentation branch")
 
     parser.add_argument("--use_relu", action="store_true", help="Apply ReLU to colorFC")
@@ -66,6 +66,7 @@ def parse_args():
     parser.add_argument("--no_cit", action="store_true", help="Remove pretrain CIT Network from Generator")
 
     parser.add_argument("--link_color", action="store_true", help="Link color of different tags")
+    parser.add_argument("--dual_color_space", action="store_true", help="Use RGB and HSV color space")
     parser.add_argument("--dual_branch", action="store_true", help="Use dual-branch network")
     parser.add_argument("--direct_cat", action="store_true", help="Use direct concatenation")
 

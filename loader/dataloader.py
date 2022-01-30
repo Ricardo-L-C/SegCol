@@ -192,7 +192,7 @@ class ColorAndSketchDataset(Dataset):
 
         sketch_path = random.choice(self.sketch_path_list)
         color_path = self.rgb_path / f"{file_id}.png"
-        skeleton_path = sketch_path.with_name(f"{sketch_path.name.split('_')[0]}_skeleton") / f"{file_id}.png"
+        skeleton_path = sketch_path.with_name(sketch_path.name + "_skeleton") / f"{file_id}.png"
         sketch_path = sketch_path / f"{file_id}.png"
 
         color_img = Image.open(color_path).convert('RGB')

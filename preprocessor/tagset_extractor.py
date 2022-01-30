@@ -122,7 +122,7 @@ def main_tag_extract(dataset, meta_list):
                     tag_line = " ".join(tag["id"] for tag in meta["tags"] if tag["category"] == "0")
                     tag_lines.append(f"{file_id} {tag_line}\n")
 
-                    resolutions[int(meta["id"])] = (int(meta["image_width"]), int(meta["image_height"]))
+                    resolutions[meta["id"]] = (int(meta["image_width"]), int(meta["image_height"]))
 
                     selected.add(int(meta["id"]))
 
