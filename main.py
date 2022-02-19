@@ -20,7 +20,7 @@ def parse_args():
 
     parser.add_argument("--model", type=str, default="tag2pix", choices=["tag2pix", "senet", "resnext", "catconv", "catall", "adain", "seadain"], help="Model Types. (default: tag2pix == SECat)")
 
-    parser.add_argument("--local_rank", type=int, default=-1)
+    parser.add_argument("--local_rank", type=int, default=0)
 
     parser.add_argument("--cpu", action="store_true", help="If set, use cpu only")
     parser.add_argument("--test", action="store_true", help="Colorize line arts in test_dir based on `tag_txt`")
@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument("--test_image_count", type=int, default=64, help="Total count of colorizing test images")
 
     parser.add_argument("--data_dir", type=Path, default=dataset_path, help="Path to the train/test data root directory")
-    parser.add_argument("--test_dir", type=Path, default="liner_test", help="Directory name of the test line art directory. It has to be in the data_dir.")
+    parser.add_argument("--test_dir", type=str, default="liner_test", help="Directory name of the test line art directory. It has to be in the data_dir.")
     parser.add_argument("--tag_txt", type=str, default="tags.txt", help="Text file name of formatted text tag sets (see README). It has to be in the data_dir.")
 
     parser.add_argument("--result_dir", type=Path, default="./results", help="Path to save generated images and network dump")
@@ -58,7 +58,6 @@ def parse_args():
     parser.add_argument("--cit_cvt_weight", type=float, nargs="+", default=[1, 1], help="CIT CVT Loss weight. space-separated")
     parser.add_argument("--two_step_epoch", type=int, default=0, help="If nonzero, apply two-step train. (start_epoch to args.auto_two_step_epoch: cit_cvt_weight==[0, 0], after: --cit_cvt_weight)")
     parser.add_argument("--brightness_epoch", type=int, default=0, help="If nonzero, control brightness after this epoch (see Section 4.3.3) (start_epoch to bright_down_epoch: ColorJitter.brightness == 0.2, after: [1, 7])")
-    parser.add_argument("--seg_epoch", type=int, default=20, help="Train epoch of segmentation branch")
 
     parser.add_argument("--use_relu", action="store_true", help="Apply ReLU to colorFC")
     parser.add_argument("--no_bn", action="store_true", help="Remove every BN Layer from Generator")
@@ -84,6 +83,7 @@ def validate_args(args):
     assert args.batch_size >= 1, "batch size must be larger than or equal to one"
 
     if args.load != "":
+        args.load = Path(args.load)
         assert args.load.exists(), "cannot find network dump file"
     assert args.pretrain_dump.exists(), "cannot find pretrained CIT network dump file"
     assert args.tag_dump.exists(), "cannot find tag metadata pickle file"

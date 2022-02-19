@@ -235,9 +235,11 @@ class SimpleDecoderBlock(nn.Module):
         super(SimpleDecoderBlock, self).__init__()
         self.decoder = nn.Conv2d(inplanes, planes, 3, 1, 1)
         self.ps = nn.PixelShuffle(2)
+        self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
         x = self.decoder(x)
+        x = self.relu(x)
         return self.ps(x)
 
 class Generator(nn.Module):
@@ -350,18 +352,6 @@ class Generator(nn.Module):
             if hasattr(m, 'bias') and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def unrequire_seg_branch(self):
-        for i in self.ske_deconv1.parameters():
-            i.requires_grad = False
-        for i in self.ske_deconv2.parameters():
-            i.requires_grad = False
-        for i in self.ske_deconv3.parameters():
-            i.requires_grad = False
-        for i in self.ske_deconv4.parameters():
-            i.requires_grad = False
-        for i in self.ske_deconv5.parameters():
-            i.requires_grad = False
-
     def make_encoder_block(self, in_channels, out_channels, first=False):
         if first:
             stride = 1
@@ -375,7 +365,7 @@ class Generator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
         )
 
-    def forward(self, input, feature_tensor, c_tag_class, link, require=0): # 0: all, 1: main, 2: main, guide
+    def forward(self, input, feature_tensor, c_tag_class, link, require=0): # 0: all, 1: main, 2: main, guide, 3: skeleton
         out1 = self.conv1(input)
         out2 = self.conv2(out1)
         out3 = self.conv3(out2)
@@ -385,25 +375,9 @@ class Generator(nn.Module):
         # ==============================
         # it's about color variant tag set
         # temporally, don't think about noise z
-
-        # c_tag_class = torch.cat((c_tag_class, link), 1)
         c_tag_class = link
 
-        # c_tag_tensor = self.Linear(c_tag_class)
-        # c_tag_tensor = c_tag_tensor.view(-1, 32, self.bottom_h, self.bottom_h)
-        # c_tag_tensor = self.colorConv(c_tag_tensor)
-
-        # c_se_tensor = self.colorFC(c_tag_class)
         c_se_tensor = self.set_transformer(c_tag_class)
-
-        # ==============================
-        # Convolution Layer for Feature Tensor
-
-        # if self.net_opt['cit']:
-        #     feature_tensor = self.featureConv(feature_tensor)
-        #     concat_tensor = torch.cat([out5, feature_tensor, c_tag_tensor], 1)
-        # else:
-        #     concat_tensor = torch.cat([out5, c_tag_tensor], 1)
 
         if self.net_opt['cit']:
             feature_tensor = self.featureConv(feature_tensor)
@@ -411,19 +385,22 @@ class Generator(nn.Module):
         else:
             concat_tensor = out5
 
-        out4_ske = self.ske_deconv1(concat_tensor)
-        out4_prime = self.deconv1(concat_tensor, c_se_tensor)
 
         # ==============================
         # Deconv layers
 
+        out4_ske = self.ske_deconv1(concat_tensor)
         out3_ske = self.ske_deconv2(torch.cat([out4_ske, out4], 1))
-        out3_prime = self.deconv2(torch.cat([out4_prime, out4_ske, out4], 1), c_se_tensor)
-
         out2_ske = self.ske_deconv3(torch.cat([out3_ske, out3], 1))
-        out2_prime = self.deconv3(torch.cat([out3_prime, out3_ske, out3], 1), c_se_tensor)
-
         out1_ske = self.ske_deconv4(torch.cat([out2_ske, out2], 1))
+
+        if require == 3:
+            skeleton_output = self.ske_deconv5(torch.cat([out1_ske, out1], 1))
+            return skeleton_output
+
+        out4_prime = self.deconv1(concat_tensor, c_se_tensor)
+        out3_prime = self.deconv2(torch.cat([out4_prime, out4_ske, out4], 1), c_se_tensor)
+        out2_prime = self.deconv3(torch.cat([out3_prime, out3_ske, out3], 1), c_se_tensor)
         out1_prime = self.deconv4(torch.cat([out2_prime, out2_ske, out2], 1), c_se_tensor)
 
         full_output = self.deconv5(torch.cat([out1_prime, out1_ske, out1], 1))
@@ -513,7 +490,7 @@ class Discriminator(nn.Module):
             SEResNeXt._make_layer(self, BottleneckX, planes//4, 1, inplanes=inplanes),
         )
 
-    def forward(self, input):
+    def forward(self, input, require=0): # 0: all, 1: adv
         out = self.conv1(input)
         out = self.conv2(out)
         out = self.conv3(out)
@@ -525,8 +502,12 @@ class Discriminator(nn.Module):
         out = self.avgpool(out)
         out = out.view(out.size(0), -1)
 
+        adv_judge = self.adv_judge(out)
+
+        if require == 1:
+            return adv_judge
+
         cit_judge = self.cit_judge(out)
         cvt_judge = self.cvt_judge(out)
-        adv_judge = self.adv_judge(out)
 
         return adv_judge, cit_judge, cvt_judge

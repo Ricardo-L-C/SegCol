@@ -40,21 +40,20 @@ def get_tag_dict(tag_dump_path):
 
 colors = ['black', 'white', 'red', 'blue', 'pink', 'green', 'brown', 'grey', 'yellow', 'purple', 'orange', 'silver', 'aqua', 'gradient', 'shiny', 'pale', 'lavender', 'lightbrown', 'dark', 'beige', 'black-framed', 'red-framed', 'blonde']
 parts = ['hair', 'background', 'eyes', 'skirt', 'legwear', 'bow', 'dress', 'ribbon', 'shirt', 'skin', 'footwear', 'neckwear', 'bikini', 'bra', 'gloves', 'panties', 'eyewear', 'hat', 'jacket']
-link_map = {"613194": 4, "613209": 23, "613197": 118, "613195": 61, "613208": 42, "613207": 175, "613200": 137, "613205": 80, "659098": 10, "1303252": 124, "1288957": 29, "683385": 48, "1293269": 67, "374791": 34, "16718": 15, "374628": 3, "428173": 60, "503552": 41, "515302": 98, "520398": 22, "520397": 79, "613885": 117, "616524": 136, "498950": 193, "376766": 27, "524961": 8, "390594": 46, "397327": 65, "514515": 84, "474820": 14, "486611": 128, "435433": 52, "1401711": 49, "1441865": 11, "1403814": 68, "1402579": 106, "1441874": 163, "547860": 18, "471601": 13, "463127": 32, "456585": 89, "14620": 25, "39127": 6, "377140": 63, "389777": 44, "166531": 82, "390596": 177, "166757": 101, "390401": 45, "401289": 159, "474500": 7, "498000": 64, "477288": 26, "520991": 83, "71730": 351, "494744": 275, "446647": 294, "391297": 28, "378561": 66, "426936": 31, "374620": 12, "460324": 50, "10959": 59, "8526": 40, "16578": 116, "10960": 97, "15654": 173, "89189": 154, "16750": 78, "13199": 2, "89368": 230, "95405": 192, "89228": 135, "390186": 211, "1373022": 415, "1373029": 396, "87788": 418, "16867": 114, "13200": 0, "10953": 57, "16442": 171, "11429": 76, "15425": 209, "8388": 95, "5403": 38, "16581": 19, "87676": 190, "16580": 133, "94007": 228, "403081": 304, "468534": 323, "476134": 17, "538901": 36, "470807": 43, "546609": 62, "701697": 24, "563256": 157, "463115": 81, "1247160": 5, "615165": 100, "515193": 20, "632214": 134, "580545": 58, "584749": 77, "531371": 248, "593298": 153, "569748": 1, "593297": 96, "593296": 39, "646879": 115, "643898": 172, "645753": 191, "684986": 362}
+link_map = {'613194': 4, '613209': 23, '613197': 118, '613195': 61, '613208': 42, '613207': 175, '613200': 137, '613205': 80, '659098': 10, '1303252': 124, '1288957': 29, '683385': 48, '1293269': 67, '374791': 34, '16718': 15, '374628': 3, '428173': 60, '503552': 41, '515302': 98, '520398': 22, '520397': 79, '613885': 117, '616524': 136, '498950': 193, '376766': 27, '524961': 8, '390594': 46, '397327': 65, '514515': 84, '474820': 14, '486611': 128, '435433': 52, '1401711': 49, '1441865': 11, '1403814': 68, '1402579': 106, '1441874': 163, '547860': 18, '471601': 13, '463127': 32, '456585': 89, '14620': 25, '39127': 6, '377140': 63, '389777': 44, '166531': 82, '390596': 177, '166757': 101, '390401': 45, '401289': 159, '474500': 7, '498000': 64, '477288': 26, '520991': 83, '71730': 351, '494744': 275, '446647': 294, '391297': 28, '378561': 66, '426936': 31, '374620': 12, '460324': 50, '10959': 59, '8526': 40, '16578': 116, '10960': 97, '15654': 173, '89189': 154, '16750': 78, '13199': 2, '89368': 230, '95405': 192, '89228': 135, '390186': 211, '517427': 306, '376034': 21, '1373022': 415, '1373029': 396, '87788': 418, '16867': 114, '13200': 0, '10953': 57, '16442': 171, '11429': 76, '15425': 209, '8388': 95, '5403': 38, '16581': 19, '87676': 190, '16580': 133, '94007': 228, '403081': 304, '468534': 323, '391128': 247, '524070': 266, '476134': 17, '538901': 36, '470807': 43, '546609': 62, '701697': 24, '563256': 157, '463115': 81, '1247160': 5, '615165': 100, '515193': 20, '632214': 134, '580545': 58, '584749': 77, '531371': 248, '593298': 153, '569748': 1, '593297': 96, '593296': 39, '646879': 115, '643898': 172, '645753': 191, '684986': 362}
 
-def read_tagline_txt(tag_txt_path, img_dir_path, iv_dict, cv_dict, data_size=0, is_train=True, seed=-1):
-
+def read_tagline_txt(tag_txt_path, img_dir_path, iv_dict, cv_dict, data_size=0, is_train=True):
     print(str(tag_txt_path))
+    if not tag_txt_path.exists():
+        raise Exception(f'tag list text file "{tag_txt_path}" does not exist.')
 
     iv_class_len = len(iv_dict)
     cv_class_len = len(cv_dict)
     print("read_tagline_txt! We will use %d, %d tags" % (iv_class_len, cv_class_len))
 
-    if not tag_txt_path.exists():
-        raise Exception(f'tag list text file "{tag_txt_path}" does not exist.')
-
     iv_tag_set = set(iv_dict.keys())
     cv_tag_set = set(cv_dict.keys())
+
     iv_class_list = []
     cv_class_list = []
     file_id_list = []
@@ -77,10 +76,6 @@ def read_tagline_txt(tag_txt_path, img_dir_path, iv_dict, cv_dict, data_size=0, 
     with tag_txt_path.open('r') as f:
         for line in f:
             tag_lines.append(line)
-
-    random.seed(10)
-    random.shuffle(tag_lines)
-    random.seed(time.time() if seed < 0 else seed)
 
     for line in tag_lines:
         count_all += 1
@@ -333,21 +328,14 @@ def get_train_dataset(args):
     print('making train set...')
 
     rgb_train_path = data_dir_path / "rgb_train"
-    sketch_dir_path_list = ["keras_train", "xdog_train"] # "simpl_train"
+    sketch_dir_path_list = ["keras_train", "keras_simp_train", "xdog_simp_train"]
     sketch_dir_path_list = [data_dir_path / p for p in sketch_dir_path_list if (data_dir_path / p).exists()]
 
-    (train_id_list, train_iv_class_list, train_cv_class_list, link_list) = read_tagline_txt(
-        tag_path, rgb_train_path, iv_dict, cv_dict, data_size=data_size, is_train=True, seed=args.seed)
+    (train_id_list, train_iv_class_list, train_cv_class_list, link_list) = read_tagline_txt(tag_path, rgb_train_path, iv_dict, cv_dict, data_size=data_size, is_train=True)
 
-    train = ColorAndSketchDataset(rgb_path=rgb_train_path, sketch_path_list=sketch_dir_path_list,
-        file_id_list=train_id_list, iv_class_list=train_iv_class_list, cv_class_list=train_cv_class_list, link_list=link_list,
-        override_len=data_size, both_transform=None, #data_randomize,
-        sketch_transform=transforms.Compose(random_jitter + data_augmentation),
-        color_transform=transforms.Compose(data_augmentation + swap_color_space),
-        seed=args.seed, link=args.link_color)
+    train = ColorAndSketchDataset(rgb_path=rgb_train_path, sketch_path_list=sketch_dir_path_list, file_id_list=train_id_list, iv_class_list=train_iv_class_list, cv_class_list=train_cv_class_list, link_list=link_list, override_len=data_size, both_transform=None, sketch_transform=transforms.Compose(random_jitter + data_augmentation), color_transform=transforms.Compose(data_augmentation + swap_color_space), seed=args.seed, link=args.link_color)
 
     train_sampler =  DistributedSampler(train)
-
     train_loader = DataLoader(train, batch_size=batch_size, sampler=train_sampler, num_workers=args.num_workers, drop_last=True, pin_memory=True)
 
     print(f'iv_class_len={iv_class_len}, cv_class_len={cv_class_len}')
@@ -370,7 +358,7 @@ def get_train_dataset(args):
         color_transform=transforms.Compose(data_augmentation + swap_color_space),
         link=args.link_color)
 
-    test_loader = DataLoader(test, batch_size=batch_size, num_workers=args.num_workers, drop_last=True, pin_memory=True)
+    test_loader = DataLoader(test, batch_size=1, num_workers=args.num_workers, drop_last=False, pin_memory=True)
 
     print(f'test: read {sketch_test_path}, id_list len={len(test_id_list)}, iv_class len={len(test_iv_class_list)}, cv_class len={len(test_cv_class_list)}')
 
@@ -418,13 +406,12 @@ class LinerTestDataset(Dataset):
         return self.data_len
 
 def get_test_dataset(args):
-    data_dir_path = Path(args.data_dir)
+    data_dir_path = args.data_dir
 
     batch_size = args.batch_size
     input_size = args.input_size
 
-    data_augmentation = [transforms.Resize((input_size, input_size), interpolation=InterpolationMode.LANCZOS),
-                        transforms.ToTensor()]
+    data_augmentation = [transforms.Resize((input_size, input_size), interpolation=InterpolationMode.LANCZOS), transforms.ToTensor()]
 
     iv_dict, cv_dict, _ = get_tag_dict(args.tag_dump)
 
@@ -437,21 +424,18 @@ def get_test_dataset(args):
     sketch_path = data_dir_path / args.test_dir
     tag_path = data_dir_path / args.tag_txt
 
-    (test_id_list, test_iv_class_list, test_cv_clas_list, link_list) = read_tagline_txt(
-        tag_path, sketch_path, iv_dict, cv_dict, is_train=False, data_size=data_size)
+    (test_id_list, test_iv_class_list, test_cv_clas_list, link_list) = read_tagline_txt(tag_path, sketch_path, iv_dict, cv_dict, is_train=False, data_size=data_size)
 
     print('making train set...')
 
-    test_dataset = LinerTestDataset(sketch_path=sketch_path, file_id_list=test_id_list,
-        iv_class_list=test_iv_class_list, cv_class_list=test_cv_clas_list, link_list=link_list,
-        override_len=data_size, sketch_transform=transforms.Compose(data_augmentation),
-        link=True)
+    test_dataset = LinerTestDataset(sketch_path=sketch_path, file_id_list=test_id_list, iv_class_list=test_iv_class_list, cv_class_list=test_cv_clas_list, link_list=link_list, override_len=data_size, sketch_transform=transforms.Compose(data_augmentation), link=True)
 
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.thread)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 
     print(f'iv_class_len={iv_class_len}, cv_class_len={cv_class_len}')
 
     return test_loader
+
 
 def get_dataset(args):
     if args.test:
