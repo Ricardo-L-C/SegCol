@@ -99,18 +99,18 @@ class tag2pix(object):
             self.ResNeXT = se_resnext_half(dump_path=args.pretrain_dump, num_classes=cit_class_num, input_channels=1)
         else:
             self.ResNeXT = nn.Sequential()
-
-        self.rgb2hsv = pretrain_rgb2hsv()
-        self.vgg16 = Vgg16()
-
-        self.G = Generator(input_size=args.input_size, layers=args.layers, cv_class_num=cvt_class_num, iv_class_num=cit_class_num, net_opt=self.net_opt)
-        self.D = Discriminator(input_dim=6, output_dim=1, input_size=self.input_size, cv_class_num=cvt_class_num, iv_class_num=cit_class_num)
-
         self.ResNeXT.to(self.device, non_blocking=True)
-        self.G.to(self.device, non_blocking=True)
-        self.D.to(self.device, non_blocking=True)
-        self.rgb2hsv.to(self.device, non_blocking=True)
-        self.vgg16.to(self.device, non_blocking=True)
+
+        self.D_input_dim = 3
+
+        if self.args.dual_color_space:
+            self.rgb2hsv = pretrain_rgb2hsv().to(self.device, non_blocking=True)
+            self.D_input_dim = 6
+
+        self.vgg16 = Vgg16().to(self.device, non_blocking=True)
+
+        self.G = Generator(input_size=args.input_size, layers=args.layers, cv_class_num=cvt_class_num, iv_class_num=cit_class_num, net_opt=self.net_opt).to(self.device, non_blocking=True)
+        self.D = Discriminator(input_dim=self.D_input_dim, output_dim=1, input_size=self.input_size, cv_class_num=cvt_class_num, iv_class_num=cit_class_num).to(self.device, non_blocking=True)
 
         for param in self.ResNeXT.parameters():
             param.requires_grad = False
@@ -168,97 +168,110 @@ class tag2pix(object):
 
                 # update D network
                 self.D_optimizer.zero_grad()
-
-                hsv_t = self.rgb2hsv(original_)
-                gt = torch.cat([original_, hsv_t], 1)
+                D_loss = 0
 
                 G_f = self.G(sketch_, feature_tensor, cv_tag_, link_, 1)
-                hsv_f = self.rgb2hsv(G_f)
-                G_f = torch.cat([G_f, hsv_f], 1)
 
-                cv_and_link = link_
-                # cv_and_link = torch.cat((cv_tag_, link_), 1)
+                if self.args.dual_color_space:
+                    hsv_gt = self.rgb2hsv(original_)
+                    gt = torch.cat([original_, hsv_gt], 1)
+
+                    hsv_f = self.rgb2hsv(G_f)
+                    G_f = torch.cat([G_f, hsv_f], 1)
+                else:
+                    gt = original_
 
                 if self.two_step_epoch == 0 or epoch >= self.two_step_epoch:
                     D_real, CIT_real, CVT_real = self.D(gt)
-                    D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
 
                     CIT_real_loss = F.binary_cross_entropy(CIT_real, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_real_loss = F.binary_cross_entropy(CVT_real, cv_and_link)
-
+                    CVT_real_loss = F.binary_cross_entropy(CVT_real, link_)
                     C_real_loss = self.cvt_weight * CVT_real_loss + self.cit_weight * CIT_real_loss
 
-                    CIT_f_fake_loss = F.binary_cross_entropy(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_f_fake_loss = F.binary_cross_entropy(CVT_f_fake, cv_and_link)
+                    D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
 
-                    C_f_fake_loss = self.cvt_weight * CVT_f_fake_loss + self.cit_weight * CIT_f_fake_loss
+                    CIT_f_fake_loss = F.binary_cross_entropy(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
+                    CVT_f_fake_loss = F.binary_cross_entropy(CVT_f_fake, link_)
+                    C_fake_loss = self.cvt_weight * CVT_f_fake_loss + self.cit_weight * CIT_f_fake_loss
+
+                    D_loss += C_real_loss + C_fake_loss
                 else:
                     D_real = self.D(gt, 1)
                     D_f_fake = self.D(G_f, 1)
 
-                    C_real_loss = 0
-                    C_f_fake_loss = 0
-
                 D_real_loss = F.binary_cross_entropy(D_real, self.y_real_)
-                D_f_fake_loss = F.binary_cross_entropy(D_f_fake, self.y_fake_)
+                D_fake_loss = F.binary_cross_entropy(D_f_fake, self.y_fake_)
 
-                D_loss = self.adv_lambda * (D_real_loss + D_f_fake_loss) + (C_real_loss + C_f_fake_loss)
+                D_loss += self.adv_lambda * (D_real_loss + D_fake_loss)
 
                 D_loss.backward()
                 self.D_optimizer.step()
 
                 # update G network
                 self.G_optimizer.zero_grad()
+                G_loss = 0
 
                 G_f, G_g, G_s = self.G(sketch_, feature_tensor, cv_tag_, link_)
-                skeleton_l1 = F.l1_loss(G_s, skeleton_)
 
-                perceptual_g, perceptual_gt = self.vgg16(G_f), self.vgg16(original_)
-                perceptual = F.mse_loss(perceptual_g, perceptual_gt)
+                skeleton_l1_loss = F.l1_loss(G_s, skeleton_)
+                G_loss += skeleton_l1_loss
 
-                hsv_fake, hsv_real = self.rgb2hsv(G_f), self.rgb2hsv(original_)
+                if self.args.local_rank == 0:
+                    self.logger.add_scalar("skeleton_l1_loss", skeleton_l1_loss.item(), step)
 
-                hsv_l1 = F.l1_loss(hsv_fake, hsv_real)
+                if not self.args.no_guide:
+                    guide_l1_loss = F.l1_loss(G_g, original_)
+                    G_loss += guide_l1_loss * self.guide_beta
 
-                G_f = torch.cat([G_f, hsv_fake], 1)
+                    if self.args.local_rank == 0:
+                        self.logger.add_scalar("guide_l1_loss", guide_l1_loss.item(), step)
+
+                if self.args.dual_color_space:
+                    perceptual_g, perceptual_gt = self.vgg16(G_f), self.vgg16(original_)
+                    rgb_perceptual_loss = F.mse_loss(perceptual_g, perceptual_gt)
+
+                    hsv_fake, hsv_real = self.rgb2hsv(G_f), self.rgb2hsv(original_)
+                    hsv_l1_loss = F.l1_loss(hsv_fake, hsv_real)
+
+                    G_loss += rgb_perceptual_loss + hsv_l1_loss
+
+                    if self.args.local_rank == 0:
+                        self.logger.add_scalar("rgb_perceptual_loss", rgb_perceptual_loss.item(), step)
+                        self.logger.add_scalar("hsv_l1_loss", hsv_l1_loss.item(), step)
+
+                    G_f = torch.cat([G_f, hsv_fake], 1)
+                else:
+                    rgb_l1_loss = F.l1_loss(G_f, original_)
+                    G_loss += rgb_l1_loss
+
+                    if self.args.local_rank == 0:
+                        self.logger.add_scalar("rgb_l1_loss", rgb_l1_loss.item(), step)
+
+                G_loss *= self.l1_lambda
 
                 if self.two_step_epoch == 0 or epoch >= self.two_step_epoch:
                     D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
 
-                    CIT_f_fake_loss = F.binary_cross_entropy(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_f_fake_loss = F.binary_cross_entropy(CVT_f_fake, cv_and_link)
+                    CIT_fake_loss = F.binary_cross_entropy(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
+                    CVT_fake_loss = F.binary_cross_entropy(CVT_f_fake, link_)
 
-                    C_f_fake_loss = self.cvt_weight * CVT_f_fake_loss + self.cit_weight * CIT_f_fake_loss
+                    C_fake_loss = self.cvt_weight * CVT_fake_loss + self.cit_weight * CIT_fake_loss
+                    G_loss += C_fake_loss
 
                     if self.args.local_rank == 0:
-                        self.logger.add_scalar("CIT_f_fake_loss", CIT_f_fake_loss.item(), step)
-                        self.logger.add_scalar("CVT_f_fake_loss", CVT_f_fake_loss.item(), step)
+                        self.logger.add_scalar("C_fake_loss", C_fake_loss.item(), step)
                 else:
                     D_f_fake = self.D(G_f, 1)
-                    C_f_fake_loss = 0
 
-                D_f_fake_loss = F.binary_cross_entropy(D_f_fake, self.y_real_)
-
-                # L1_D_f_fake_loss = self.L1Loss(G_f, original_)
-                L1_D_g_fake_loss = F.l1_loss(G_g, original_) if self.net_opt['guide'] else 0
-
-                # G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + L1_D_f_fake_loss + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
-
-                G_loss = (D_f_fake_loss + C_f_fake_loss) + (hsv_l1 + skeleton_l1 + perceptual + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
-
-                #     G_loss = (D_f_fake_loss + C_f_fake_loss) + (rgb_l1 + skeleton_l1 + L1_D_g_fake_loss * self.guide_beta) * self.l1_lambda
+                D_fake_loss = F.binary_cross_entropy(D_f_fake, self.y_real_)
+                G_loss += D_fake_loss
 
                 G_loss.backward()
                 self.G_optimizer.step()
 
                 if self.args.local_rank == 0:
-                    # self.logger.add_scalar("L1", L1_D_f_fake_loss.item(), step)
-                    self.logger.add_scalar("L1_HSV", hsv_l1.item(), step)
-                    self.logger.add_scalar("L1_skeleton", skeleton_l1.item(), step)
-                    self.logger.add_scalar("guide", L1_D_g_fake_loss.item(), step)
-                    self.logger.add_scalar("D_f_fake_loss", D_f_fake_loss.item(), step)
                     self.logger.add_scalar("G_loss", G_loss.item(), step)
-                    self.logger.add_scalar("perceptual", perceptual.item(), step)
+                    self.logger.add_scalar("D_fake_loss", D_fake_loss.item(), step)
 
                 if self.args.local_rank == 0 and (iter + 1) % 500 == 0:
                     self.visualize_results(epoch)
