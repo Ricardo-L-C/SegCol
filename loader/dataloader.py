@@ -168,8 +168,6 @@ class ColorAndSketchDataset(Dataset):
         self.sketch_transform = sketch_transform
         self.data_len = len(file_id_list)
 
-        self.link = link
-
         if override_len > 0 and self.data_len > override_len:
             self.data_len = override_len
         self.idx_shuffle = list(range(self.data_len))
@@ -202,11 +200,8 @@ class ColorAndSketchDataset(Dataset):
             sketch_img = self.sketch_transform(sketch_img)
             skeleton_img = self.sketch_transform(skeleton_img)
 
-        if self.link:
-            link_class = self.link_list[index]
-            return (color_img, sketch_img, skeleton_img, iv_tag_class, cv_tag_class, link_class)
-        else:
-            return (color_img, sketch_img, skeleton_img, iv_tag_class, cv_tag_class)
+        link_class = self.link_list[index]
+        return (color_img, sketch_img, skeleton_img, iv_tag_class, cv_tag_class, link_class)
 
     def __len__(self):
         return self.data_len
@@ -333,10 +328,10 @@ def get_train_dataset(args):
 
     (train_id_list, train_iv_class_list, train_cv_class_list, link_list) = read_tagline_txt(tag_path, rgb_train_path, iv_dict, cv_dict, data_size=data_size, is_train=True)
 
-    train = ColorAndSketchDataset(rgb_path=rgb_train_path, sketch_path_list=sketch_dir_path_list, file_id_list=train_id_list, iv_class_list=train_iv_class_list, cv_class_list=train_cv_class_list, link_list=link_list, override_len=data_size, both_transform=None, sketch_transform=transforms.Compose(random_jitter + data_augmentation), color_transform=transforms.Compose(data_augmentation + swap_color_space), seed=args.seed, link=args.link_color)
+    train = ColorAndSketchDataset(rgb_path=rgb_train_path, sketch_path_list=sketch_dir_path_list, file_id_list=train_id_list, iv_class_list=train_iv_class_list, cv_class_list=train_cv_class_list, link_list=link_list, override_len=data_size, both_transform=None, sketch_transform=transforms.Compose(random_jitter + data_augmentation), color_transform=transforms.Compose(data_augmentation + swap_color_space), seed=args.seed)
 
-    train_sampler =  DistributedSampler(train)
-    train_loader = DataLoader(train, batch_size=batch_size, sampler=train_sampler, num_workers=args.num_workers, drop_last=True, pin_memory=True)
+    train_sampler =  DistributedSampler(train, seed=args.seed, drop_last=True)
+    train_loader = DataLoader(train, batch_size=batch_size, sampler=train_sampler, num_workers=args.num_workers, pin_memory=True, drop_last=True)
 
     print(f'iv_class_len={iv_class_len}, cv_class_len={cv_class_len}')
     print(f'train: read {sketch_dir_path_list[0]}, id_list len={len(train_id_list)}, iv_class len={len(train_iv_class_list)}, cv_class len={len(train_cv_class_list)}')
@@ -355,8 +350,7 @@ def get_train_dataset(args):
         file_id_list=test_id_list, iv_class_list=test_iv_class_list, cv_class_list=test_cv_class_list, link_list=link_list,
         override_len=args.test_image_count,
         sketch_transform=transforms.Compose(data_augmentation),
-        color_transform=transforms.Compose(data_augmentation + swap_color_space),
-        link=args.link_color)
+        color_transform=transforms.Compose(data_augmentation + swap_color_space))
 
     test_loader = DataLoader(test, batch_size=1, num_workers=args.num_workers, drop_last=False, pin_memory=True)
 
@@ -367,7 +361,7 @@ def get_train_dataset(args):
 
 class LinerTestDataset(Dataset):
     def __init__(self, sketch_path, file_id_list, iv_class_list, cv_class_list, link_list,
-            override_len=None, sketch_transform=None, link=False, **kwargs):
+            override_len=None, sketch_transform=None, **kwargs):
         self.sketch_path = sketch_path
 
         self.file_id_list = file_id_list # copy
@@ -379,8 +373,6 @@ class LinerTestDataset(Dataset):
         self.sketch_transform = sketch_transform
         self.data_len = len(file_id_list)
 
-        self.link = link
-
         if override_len > 0 and self.data_len > override_len:
             self.data_len = override_len
 
@@ -391,16 +383,16 @@ class LinerTestDataset(Dataset):
         cv_tag_class = self.cv_class_list[idx]
 
         sketch_path = self.sketch_path / f"{file_id}.png"
+        skeleton_path = self.sketch_path.with_name(self.sketch_path.name + "_skeleton") / f"{file_id}.png"
 
         sketch_img = Image.open(sketch_path).convert('L')  # to [1, H, W]
+        skeleton_img = Image.open(skeleton_path).convert('L')  # to [1, H, W]
         if self.sketch_transform is not None:
             sketch_img = self.sketch_transform(sketch_img)
+            skeleton_img = self.sketch_transform(skeleton_img)
 
-        if self.link:
-            link_class = self.link_list[idx]
-            return (sketch_img, file_id, iv_tag_class, cv_tag_class, link_class)
-        else:
-            return (sketch_img, file_id, iv_tag_class, cv_tag_class)
+        link_class = self.link_list[idx]
+        return (sketch_img, skeleton_img, file_id, iv_tag_class, cv_tag_class, link_class)
 
     def __len__(self):
         return self.data_len
@@ -428,7 +420,7 @@ def get_test_dataset(args):
 
     print('making train set...')
 
-    test_dataset = LinerTestDataset(sketch_path=sketch_path, file_id_list=test_id_list, iv_class_list=test_iv_class_list, cv_class_list=test_cv_clas_list, link_list=link_list, override_len=data_size, sketch_transform=transforms.Compose(data_augmentation), link=True)
+    test_dataset = LinerTestDataset(sketch_path=sketch_path, file_id_list=test_id_list, iv_class_list=test_iv_class_list, cv_class_list=test_cv_clas_list, link_list=link_list, override_len=data_size, sketch_transform=transforms.Compose(data_augmentation))
 
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
 

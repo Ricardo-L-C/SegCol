@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import math
 from torchvision import models
+from rgb2hsv3 import Rgb2hsv
 
 # Pretrained version
 class Selayer(nn.Module):
@@ -172,90 +173,10 @@ def se_resnext_half(dump_path, **kwargs):
 
     return model
 
-class ConvNext_block(nn.Module):
-    def __init__(self):
-        super(ConvNext_block, self).__init__()
-
-        self.conv1 = nn.Conv2d(64, 64, 3, 1, 1)
-        self.ln = nn.LayerNorm([32, 32])
-        self.conv2 = nn.Conv2d(64, 256, 1, 1)
-        self.gelu = nn.GELU()
-        self.conv3 = nn.Conv2d(256, 64, 1, 1)
-
-    def forward(self, x):
-        y = self.conv1(x)
-        y = self.ln(y)
-        y = self.conv2(y)
-        y = self.gelu(y)
-        y = self.conv3(y)
-
-        y += x
-
-        return y
-
-class Rgb2hsv(nn.Module):
-    def __init__(self):
-        super(Rgb2hsv, self).__init__()
-
-        self.enc1 = nn.Sequential(
-            nn.Conv2d(3, 16, 3, 2, 1),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(16, 16, 3, 1, 1),
-            nn.LeakyReLU(0.2),
-        )
-
-        self.enc2 = nn.Sequential(
-            nn.Conv2d(16, 32, 3, 2, 1),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 32, 3, 1, 1),
-            nn.LeakyReLU(0.2),
-        )
-
-        self.enc3 = nn.Sequential(
-            nn.Conv2d(32, 64, 3, 2, 1),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 64, 3, 1, 1),
-            nn.LeakyReLU(0.2),
-        )
-
-        self.res_blocks = nn.Sequential(*[ConvNext_block() for _ in range(3)])
-
-        self.dec1 = nn.Sequential(
-            nn.Conv2d(64+64, 32*4, 3, 1, 1),
-            nn.LeakyReLU(0.2),
-            nn.PixelShuffle(2),
-        )
-
-        self.dec2 = nn.Sequential(
-            nn.Conv2d(32+32, 16*4, 3, 1, 1),
-            nn.LeakyReLU(0.2),
-            nn.PixelShuffle(2),
-        )
-
-        self.dec3 = nn.Sequential(
-            nn.Conv2d(16+16, 3*4, 3, 1, 1),
-            nn.LeakyReLU(0.2),
-            nn.PixelShuffle(2),
-        )
-
-    def forward(self, rgb):
-
-        enc1 = self.enc1(rgb)
-        enc2 = self.enc2(enc1)
-        enc3 = self.enc3(enc2)
-
-        hsv = self.res_blocks(enc3)
-
-        hsv = self.dec1(torch.cat([hsv, enc3], 1))
-        hsv = self.dec2(torch.cat([hsv, enc2], 1))
-        hsv = self.dec3(torch.cat([hsv, enc1], 1))
-
-        return hsv
-
 
 def pretrain_rgb2hsv():
     model = Rgb2hsv()
-    model.load_state_dict(torch.load("rgb2hsv3.pth", map_location=torch.device("cpu")))
+    model.load_state_dict(torch.load("rgb2hsv3.pth", map_location=torch.device("cpu"))["rgb2hsv"])
 
     for i in model.parameters():
         i.requires_grad = False

@@ -19,3 +19,5 @@ dataset
 rgb2hsv/
 rgb2hsv2/
 rgb2hsv3/
+testset/
+fid/

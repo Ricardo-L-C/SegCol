@@ -1,4 +1,3 @@
-import time
 from pathlib import Path
 
 import numpy as np
@@ -64,15 +63,16 @@ class tag2pix(object):
         self.class_num = cvt_class_num + cit_class_num
 
         self.start_epoch = 1
+        self.end_epoch = self.epoch
 
         self.result_path = args.result_dir
 
         self.device = torch.device('cuda', args.local_rank)
         torch.cuda.set_device(args.local_rank)
-        torch.distributed.init_process_group(backend='nccl')
 
         #### load dataset
         if not args.test:
+            torch.distributed.init_process_group(backend='nccl')
             self.train_data_loader, self.test_data_loader = get_dataset(args)
 
             if self.args.local_rank == 0:
@@ -109,8 +109,8 @@ class tag2pix(object):
 
         self.vgg16 = Vgg16().to(self.device, non_blocking=True)
 
-        self.G = Generator(input_size=args.input_size, layers=args.layers, cv_class_num=cvt_class_num, iv_class_num=cit_class_num, net_opt=self.net_opt).to(self.device, non_blocking=True)
-        self.D = Discriminator(input_dim=self.D_input_dim, output_dim=1, input_size=self.input_size, cv_class_num=cvt_class_num, iv_class_num=cit_class_num).to(self.device, non_blocking=True)
+        self.G = Generator(input_size=args.input_size, layers=args.layers, cv_class_num=cvt_class_num, iv_class_num=cit_class_num, net_opt=self.net_opt, dual_branch=self.args.dual_branch, direct_cat=self.args.direct_cat, link=self.args.link_color).to(self.device, non_blocking=True)
+        self.D = Discriminator(input_dim=self.D_input_dim, output_dim=1, input_size=self.input_size, cv_class_num=cvt_class_num, iv_class_num=cit_class_num, link=self.args.link_color).to(self.device, non_blocking=True)
 
         for param in self.ResNeXT.parameters():
             param.requires_grad = False
@@ -123,25 +123,26 @@ class tag2pix(object):
         self.G_optimizer = optim.Adam(self.G.parameters(), lr=args.lrG, betas=(args.beta1, args.beta2))
         self.D_optimizer = optim.Adam(self.D.parameters(), lr=args.lrD, betas=(args.beta1, args.beta2))
 
-        self.G = torch.nn.parallel.DistributedDataParallel(self.G, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True, broadcast_buffers=False)
-        self.D = torch.nn.parallel.DistributedDataParallel(self.D, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True, broadcast_buffers=False)
+        #if args.load != Path():
+        #    self.load(args.load)
+
+        if not self.args.test:
+            self.G = torch.nn.parallel.DistributedDataParallel(self.G, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True, broadcast_buffers=False)
+            self.D = torch.nn.parallel.DistributedDataParallel(self.D, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True, broadcast_buffers=False)
 
         print("device: ", self.device)
 
     def train(self):
         self.y_real_, self.y_fake_ = torch.ones(self.batch_size, 1).to(self.device, non_blocking=True), torch.zeros(self.batch_size, 1).to(self.device, non_blocking=True)
 
-        if self.load_dump:
-            self.load(self.load_path)
-            print("continue training!!!!")
-        else:
-            self.end_epoch = self.epoch
-
         if self.args.local_rank == 0:
             self.print_params()
             print('training start!!')
 
         self.D.train()
+
+        step = 0
+        max_iter = self.train_data_loader.dataset.__len__() // self.batch_size
 
         for epoch in range(self.start_epoch, self.end_epoch + 1):
             if self.args.local_rank == 0:
@@ -153,13 +154,8 @@ class tag2pix(object):
                 print('changing brightness ...')
                 self.train_data_loader.dataset.enhance_brightness(self.input_size)
 
-            max_iter = self.train_data_loader.dataset.__len__() // self.batch_size
 
             for iter, (original_, sketch_, skeleton_, iv_tag_, cv_tag_, link_) in enumerate(tqdm(self.train_data_loader, ncols=80)):
-                if iter >= max_iter:
-                    break
-
-                step = (epoch - 1) * max_iter + iter
 
                 sketch_, original_, skeleton_, iv_tag_, cv_tag_, link_ = sketch_.to(self.device, non_blocking=True), original_.to(self.device, non_blocking=True), skeleton_.to(self.device, non_blocking=True), iv_tag_.to(self.device, non_blocking=True), cv_tag_.to(self.device, non_blocking=True), link_.to(self.device, non_blocking=True)
 
@@ -170,7 +166,14 @@ class tag2pix(object):
                 self.D_optimizer.zero_grad()
                 D_loss = 0
 
-                G_f = self.G(sketch_, feature_tensor, cv_tag_, link_, 1)
+                if self.args.link_color:
+                    cv_tag_ = link_
+
+                if self.args.direct_cat:
+                    direct_cat = torch.cat((sketch_, skeleton_), 1)
+                    G_f = self.G(direct_cat, feature_tensor, cv_tag_, link_, 1)
+                else:
+                    G_f = self.G(sketch_, feature_tensor, cv_tag_, link_, 1)
 
                 if self.args.dual_color_space:
                     hsv_gt = self.rgb2hsv(original_)
@@ -185,13 +188,13 @@ class tag2pix(object):
                     D_real, CIT_real, CVT_real = self.D(gt)
 
                     CIT_real_loss = F.binary_cross_entropy(CIT_real, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_real_loss = F.binary_cross_entropy(CVT_real, link_)
+                    CVT_real_loss = F.binary_cross_entropy(CVT_real, cv_tag_)
                     C_real_loss = self.cvt_weight * CVT_real_loss + self.cit_weight * CIT_real_loss
 
                     D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
 
                     CIT_f_fake_loss = F.binary_cross_entropy(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_f_fake_loss = F.binary_cross_entropy(CVT_f_fake, link_)
+                    CVT_f_fake_loss = F.binary_cross_entropy(CVT_f_fake, cv_tag_)
                     C_fake_loss = self.cvt_weight * CVT_f_fake_loss + self.cit_weight * CIT_f_fake_loss
 
                     D_loss += C_real_loss + C_fake_loss
@@ -211,13 +214,17 @@ class tag2pix(object):
                 self.G_optimizer.zero_grad()
                 G_loss = 0
 
-                G_f, G_g, G_s = self.G(sketch_, feature_tensor, cv_tag_, link_)
-
-                skeleton_l1_loss = F.l1_loss(G_s, skeleton_)
-                G_loss += skeleton_l1_loss
-
-                if self.args.local_rank == 0:
-                    self.logger.add_scalar("skeleton_l1_loss", skeleton_l1_loss.item(), step)
+                if self.args.dual_branch:
+                    G_f, G_g, G_s = self.G(sketch_, feature_tensor, cv_tag_, link_)
+                    skeleton_l1_loss = F.l1_loss(G_s, skeleton_)
+                    G_loss += skeleton_l1_loss
+                    if self.args.local_rank == 0:
+                        self.logger.add_scalar("skeleton_l1_loss", skeleton_l1_loss.item(), step)
+                elif self.args.direct_cat:
+                    direct_cat = torch.cat((sketch_, skeleton_), 1)
+                    G_f, G_g = self.G(direct_cat, feature_tensor, cv_tag_, link_)
+                else:
+                    G_f, G_g = self.G(sketch_, feature_tensor, cv_tag_, link_)
 
                 if not self.args.no_guide:
                     guide_l1_loss = F.l1_loss(G_g, original_)
@@ -253,7 +260,7 @@ class tag2pix(object):
                     D_f_fake, CIT_f_fake, CVT_f_fake = self.D(G_f)
 
                     CIT_fake_loss = F.binary_cross_entropy(CIT_f_fake, iv_tag_) if self.net_opt['cit'] else 0
-                    CVT_fake_loss = F.binary_cross_entropy(CVT_f_fake, link_)
+                    CVT_fake_loss = F.binary_cross_entropy(CVT_f_fake, cv_tag_)
 
                     C_fake_loss = self.cvt_weight * CVT_fake_loss + self.cit_weight * CIT_fake_loss
                     G_loss += C_fake_loss
@@ -273,9 +280,15 @@ class tag2pix(object):
                     self.logger.add_scalar("G_loss", G_loss.item(), step)
                     self.logger.add_scalar("D_fake_loss", D_fake_loss.item(), step)
 
+
+                if self.args.local_rank == 0 and epoch == 1 and (iter + 1)  == 100:
+                    self.visualize_results(epoch)
+
                 if self.args.local_rank == 0 and (iter + 1) % 500 == 0:
                     self.visualize_results(epoch)
                     print("Epoch: [{:2d}] [{:4d}/{:4d}] D_loss: {:.8f}, G_loss: {:.8f}".format(epoch, (iter + 1), max_iter, D_loss.item(), G_loss.item()))
+
+                step += 1
 
             if self.args.local_rank == 0:
                 self.visualize_results(epoch)
@@ -300,13 +313,17 @@ class tag2pix(object):
         result_path.mkdir(exist_ok=True)
 
         with torch.no_grad():
-            for sketch_, index_, _, cv_tag_, link_ in tqdm(self.test_data_loader, ncols=80):
-                sketch_, cv_tag_, link_ = sketch_.to(self.device, non_blocking=True), cv_tag_.to(self.device, non_blocking=True), link_.to(self.device, non_blocking=True)
+            for sketch_, skeleton_, index_, _, cv_tag_, link_ in tqdm(self.test_data_loader, ncols=80):
+                sketch_, skeleton_, cv_tag_, link_ = sketch_.to(self.device, non_blocking=True), skeleton_.to(self.device, non_blocking=True), cv_tag_.to(self.device, non_blocking=True), link_.to(self.device, non_blocking=True)
 
                 with torch.no_grad():
                     feature_tensor = self.ResNeXT(sketch_)
 
-                G_f = self.G(sketch_, feature_tensor, cv_tag_, link_, 1)
+                if self.args.direct_cat:
+                    direct_cat = torch.cat((sketch_, skeleton_), 1)
+                    G_f = self.G(direct_cat, feature_tensor, cv_tag_, link_, 1)
+                else:
+                    G_f = self.G(sketch_, feature_tensor, cv_tag_, link_, 1)
                 G_f = self.color_revert(G_f.cpu())
 
                 for ind, result in zip(index_.cpu().numpy(), G_f):
@@ -327,32 +344,41 @@ class tag2pix(object):
 
             G_f, G_g, G_s = [], [], []
 
-            for i, (_, sketch, _, _, cv_tag, link) in enumerate(self.test_data_loader):
-                sketch, cv_tag, link = sketch.to(self.device, non_blocking=True), cv_tag.to(self.device, non_blocking=True), link.to(self.device, non_blocking=True)
+            for i, (_, sketch, skeleton_, _, cv_tag, link) in enumerate(self.test_data_loader):
+                sketch, skeleton_, cv_tag, link = sketch.to(self.device, non_blocking=True), skeleton_.to(self.device, non_blocking=True), cv_tag.to(self.device, non_blocking=True), link.to(self.device, non_blocking=True)
 
                 feature_tensor = self.ResNeXT(sketch)
-                f, g, s = self.G(sketch, feature_tensor, cv_tag, link)
+
+                if self.args.dual_branch:
+                    f, g, s = self.G(sketch, feature_tensor, cv_tag, link)
+                    G_s.append(s.cpu())
+                elif self.args.direct_cat:
+                    direct_cat = torch.cat((sketch, skeleton_), 1)
+                    f, g = self.G(direct_cat, feature_tensor, cv_tag, link)
+                else:
+                    f, g = self.G(sketch, feature_tensor, cv_tag, link)
                 G_f.append(f.cpu())
                 G_g.append(g.cpu())
-                G_s.append(s.cpu())
 
                 if i >= 63:
                     break
 
             G_f = self.color_revert(torch.cat(G_f, 0))
             G_g = self.color_revert(torch.cat(G_g, 0))
-            G_s = self.color_revert(torch.cat(G_s, 0))
+            if self.args.dual_branch:
+                G_s = self.color_revert(torch.cat(G_s, 0))
 
             image_frame_dim = int(np.ceil(np.sqrt(64)))
 
             utils.save_images(G_f[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim], self.result_path / 'tag2pix_epoch{:03d}_G_f.png'.format(epoch))
             utils.save_images(G_g[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim], self.result_path / 'tag2pix_epoch{:03d}_G_g.png'.format(epoch))
-            utils.save_images(G_s[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim], self.result_path / 'tag2pix_epoch{:03d}_G_s.png'.format(epoch))
+            if self.args.dual_branch:
+                utils.save_images(G_s[:image_frame_dim * image_frame_dim, :, :, :], [image_frame_dim, image_frame_dim], self.result_path / 'tag2pix_epoch{:03d}_G_s.png'.format(epoch))
 
     def save(self, save_epoch):
         torch.save({
-            'G' : self.G.state_dict(),
-            'D' : self.D.state_dict(),
+            'G' : self.G.module.state_dict(),
+            'D' : self.D.module.state_dict(),
             'G_optimizer' : self.G_optimizer.state_dict(),
             'D_optimizer' : self.D_optimizer.state_dict(),
             'finish_epoch' : save_epoch,

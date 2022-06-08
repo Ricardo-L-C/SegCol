@@ -71,6 +71,9 @@ def parse_args():
 
     parser.add_argument("--seed", type=int, default=-1, help="if positive, apply random seed")
 
+    parser.add_argument("--wgan", action="store_true", help="Use wGAN loss")
+    parser.add_argument("--weight_limit", type=float, default=0.01, help="Use wGAN loss")
+
     args = parser.parse_args()
 
     return args
@@ -107,15 +110,14 @@ def set_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def main():
     args = parse_args()
 
     if args.local_rank == 0:
         validate_args(args)
-
-    torch.backends.cudnn.benchmark = True
 
     set_seed(args.seed)
 

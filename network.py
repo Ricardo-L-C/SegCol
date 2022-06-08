@@ -244,47 +244,66 @@ class SimpleDecoderBlock(nn.Module):
 
 class Generator(nn.Module):
     def __init__(self, input_size, cv_class_num, iv_class_num, input_dim=1, output_dim=3,
-                 layers=[12, 8, 5, 5], net_opt=DEFAULT_NET_OPT):
+                 layers=[12, 8, 5, 5], net_opt=DEFAULT_NET_OPT, dual_branch=False, direct_cat=False, link=False):
         super(Generator, self).__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.cv_class_num = cv_class_num
         self.iv_class_num = iv_class_num
-
-        self.link_num = 23 * 19
 
         self.input_size = input_size
         self.layers = layers
 
+        self.dual_branch = dual_branch
+
         self.cardinality = 16
 
         self.bottom_h = self.input_size // 16
-        # self.Linear = nn.Linear(cv_class_num + self.link_num, self.bottom_h*self.bottom_h*32)
-        # self.Linear = nn.Linear(self.link_num, self.bottom_h*self.bottom_h*32)
+
+        self.link = link
+
+        if self.link:
+            self.cv_class_num = 23 * 19
+        else:
+            self.cv_class_num = cv_class_num
+
+        if direct_cat:
+            self.input_dim += 1
 
         self.color_fc_out = 64
         self.net_opt = net_opt
 
         no_bn = not net_opt['bn']
 
-        # if net_opt['relu']:
-        #     self.colorFC = nn.Sequential(
-        #         # nn.Linear(cv_class_num + self.link_num, self.color_fc_out), nn.ReLU(inplace=True),
-        #         nn.Linear(self.link_num, self.color_fc_out), nn.ReLU(inplace=True),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out), nn.ReLU(inplace=True),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out), nn.ReLU(inplace=True),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out)
-        #     )
-        # else:
-        #     self.colorFC = nn.Sequential(
-        #         # nn.Linear(cv_class_num + self.link_num, self.color_fc_out),
-        #         nn.Linear(self.link_num, self.color_fc_out),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out),
-        #         nn.Linear(self.color_fc_out, self.color_fc_out)
-        #     )
+        if self.link:
+            self.set_transformer = SetTransformerEncoder(19, self.color_fc_out)
+            bottom_layer_len = 256
+        else:
+            self.Linear = nn.Linear(cv_class_num, self.bottom_h*self.bottom_h*32)
+            bottom_layer_len = 256 + 64
 
-        self.set_transformer = SetTransformerEncoder(19, 64)
+            if net_opt['relu']:
+                self.colorFC = nn.Sequential(
+                    nn.Linear(self.cv_class_num, self.color_fc_out), nn.ReLU(inplace=True),
+                    nn.Linear(self.color_fc_out, self.color_fc_out), nn.ReLU(inplace=True),
+                    nn.Linear(self.color_fc_out, self.color_fc_out), nn.ReLU(inplace=True),
+                    nn.Linear(self.color_fc_out, self.color_fc_out)
+                )
+            else:
+                self.colorFC = nn.Sequential(
+                    nn.Linear(self.cv_class_num, self.color_fc_out),
+                    nn.Linear(self.color_fc_out, self.color_fc_out),
+                    nn.Linear(self.color_fc_out, self.color_fc_out),
+                    nn.Linear(self.color_fc_out, self.color_fc_out)
+                )
+
+            self.colorConv = nn.Sequential(
+                nn.Conv2d(32, 64, 3, 1, 1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(64, 64, 3, 1, 1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(64, 64, 3, 1, 1),
+                nn.Tanh(),
+            )
 
         self.conv1 = self.make_encoder_block(self.input_dim, 16, True)
         self.conv2 = self.make_encoder_block(16, 32)
@@ -292,43 +311,45 @@ class Generator(nn.Module):
         self.conv4 = self.make_encoder_block(64, 128)
         self.conv5 = self.make_encoder_block(128, 256)
 
-        bottom_layer_len = 256 #+ 64
         if net_opt["cit"]:
             bottom_layer_len += 256
 
-        self.deconv1 = DecoderBlock(bottom_layer_len, 4*256, self.color_fc_out, self.layers[0], no_bn=no_bn) # (output_size / 8, output_size / 8)
-        self.deconv2 = DecoderBlock(256 + 128 + 256, 4*128, self.color_fc_out, self.layers[1], no_bn=no_bn) # (output_size / 4, output_size / 4)
-        self.deconv3 = DecoderBlock(128 + 64 + 128, 4*64, self.color_fc_out, self.layers[2], no_bn=no_bn) # (output_size / 2, output_size / 2)
-        self.deconv4 = DecoderBlock(64 + 32 + 64, 4*32, self.color_fc_out, self.layers[3], no_bn=no_bn) # (output_size, output_size)
-        self.deconv5 = nn.Sequential(
-            nn.Conv2d(32 + 16 + 32, 32, 3, 1, 1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(32, 3, 3, 1, 1),
-            nn.Tanh(),
-        )
 
-        self.ske_deconv1 = SimpleDecoderBlock(bottom_layer_len, 4*256)
-        self.ske_deconv2 = SimpleDecoderBlock(256 + 128, 4*128)
-        self.ske_deconv3 = SimpleDecoderBlock(128 + 64, 4*64)
-        self.ske_deconv4 = SimpleDecoderBlock(64 + 32, 4*32)
-        self.ske_deconv5 = nn.Sequential(
-            nn.Conv2d(32 + 16, 32, 3, 1, 1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(32, 1, 3, 1, 1),
-            nn.Tanh(),
-        )
+        if self.dual_branch:
+            self.deconv1 = DecoderBlock(bottom_layer_len, 4*256, self.color_fc_out, self.layers[0], no_bn=no_bn) # (output_size / 8, output_size / 8)
+            self.deconv2 = DecoderBlock(256 + 128 + 256, 4*128, self.color_fc_out, self.layers[1], no_bn=no_bn) # (output_size / 4, output_size / 4)
+            self.deconv3 = DecoderBlock(128 + 64 + 128, 4*64, self.color_fc_out, self.layers[2], no_bn=no_bn) # (output_size / 2, output_size / 2)
+            self.deconv4 = DecoderBlock(64 + 32 + 64, 4*32, self.color_fc_out, self.layers[3], no_bn=no_bn) # (output_size, output_size)
+            self.deconv5 = nn.Sequential(
+                nn.Conv2d(32 + 16 + 32, 32, 3, 1, 1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(32, 3, 3, 1, 1),
+                nn.Tanh(),
+            )
+            self.ske_deconv1 = SimpleDecoderBlock(bottom_layer_len, 4*256)
+            self.ske_deconv2 = SimpleDecoderBlock(256 + 128, 4*128)
+            self.ske_deconv3 = SimpleDecoderBlock(128 + 64, 4*64)
+            self.ske_deconv4 = SimpleDecoderBlock(64 + 32, 4*32)
+            self.ske_deconv5 = nn.Sequential(
+                nn.Conv2d(32 + 16, 32, 3, 1, 1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(32, 1, 3, 1, 1),
+                nn.Tanh(),
+            )
+        else:
+            self.deconv1 = DecoderBlock(bottom_layer_len, 4*256, self.color_fc_out, self.layers[0], no_bn=no_bn) # (output_size / 8, output_size / 8)
+            self.deconv2 = DecoderBlock(256 + 128, 4*128, self.color_fc_out, self.layers[1], no_bn=no_bn) # (output_size / 4, output_size / 4)
+            self.deconv3 = DecoderBlock(128 + 64, 4*64, self.color_fc_out, self.layers[2], no_bn=no_bn) # (output_size / 2, output_size / 2)
+            self.deconv4 = DecoderBlock(64 + 32, 4*32, self.color_fc_out, self.layers[3], no_bn=no_bn) # (output_size, output_size)
+            self.deconv5 = nn.Sequential(
+                nn.Conv2d(32 + 16, 32, 3, 1, 1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(32, 3, 3, 1, 1),
+                nn.Tanh(),
+            )
 
         if net_opt['cit']:
             self.featureConv = FeatureConv(net_opt=net_opt)
-
-        # self.colorConv = nn.Sequential(
-        #     nn.Conv2d(32, 64, 3, 1, 1),
-        #     nn.LeakyReLU(0.2, inplace=True),
-        #     nn.Conv2d(64, 64, 3, 1, 1),
-        #     nn.LeakyReLU(0.2, inplace=True),
-        #     nn.Conv2d(64, 64, 3, 1, 1),
-        #     nn.Tanh(),
-        # )
 
         if net_opt['guide']:
             self.deconv_for_decoder = nn.Sequential(
@@ -365,7 +386,7 @@ class Generator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
         )
 
-    def forward(self, input, feature_tensor, c_tag_class, link, require=0): # 0: all, 1: main, 2: main, guide, 3: skeleton
+    def forward(self, input, feature_tensor, c_tag_class, link, require=0): # 0: all, 1: main, 2: main, guide
         out1 = self.conv1(input)
         out2 = self.conv2(out1)
         out3 = self.conv3(out2)
@@ -375,35 +396,51 @@ class Generator(nn.Module):
         # ==============================
         # it's about color variant tag set
         # temporally, don't think about noise z
-        c_tag_class = link
 
-        c_se_tensor = self.set_transformer(c_tag_class)
+        if self.link:
+            c_se_tensor = self.set_transformer(link)
 
-        if self.net_opt['cit']:
-            feature_tensor = self.featureConv(feature_tensor)
-            concat_tensor = torch.cat([out5, feature_tensor], 1)
+            if self.net_opt['cit']:
+                feature_tensor = self.featureConv(feature_tensor)
+                concat_tensor = torch.cat([out5, feature_tensor], 1)
+            else:
+                concat_tensor = out5
         else:
-            concat_tensor = out5
+            c_tag_tensor = self.Linear(c_tag_class)
+            c_tag_tensor = c_tag_tensor.view(-1, 32, self.bottom_h, self.bottom_h)
+            c_tag_tensor = self.colorConv(c_tag_tensor)
+
+            c_se_tensor = self.colorFC(c_tag_class)
+
+
+            if self.net_opt['cit']:
+                feature_tensor = self.featureConv(feature_tensor)
+                concat_tensor = torch.cat([out5, feature_tensor, c_tag_tensor], 1)
+            else:
+                concat_tensor = torch.cat([out5, c_tag_tensor], 1)
 
 
         # ==============================
         # Deconv layers
 
-        out4_ske = self.ske_deconv1(concat_tensor)
-        out3_ske = self.ske_deconv2(torch.cat([out4_ske, out4], 1))
-        out2_ske = self.ske_deconv3(torch.cat([out3_ske, out3], 1))
-        out1_ske = self.ske_deconv4(torch.cat([out2_ske, out2], 1))
+        if not self.dual_branch:
+            out4_prime = self.deconv1(concat_tensor, c_se_tensor)
+            out3_prime = self.deconv2(torch.cat([out4_prime, out4], 1), c_se_tensor)
+            out2_prime = self.deconv3(torch.cat([out3_prime, out3], 1), c_se_tensor)
+            out1_prime = self.deconv4(torch.cat([out2_prime, out2], 1), c_se_tensor)
+            full_output = self.deconv5(torch.cat([out1_prime, out1], 1))
+        else:
+            out4_ske = self.ske_deconv1(concat_tensor)
+            out3_ske = self.ske_deconv2(torch.cat([out4_ske, out4], 1))
+            out2_ske = self.ske_deconv3(torch.cat([out3_ske, out3], 1))
+            out1_ske = self.ske_deconv4(torch.cat([out2_ske, out2], 1))
 
-        if require == 3:
-            skeleton_output = self.ske_deconv5(torch.cat([out1_ske, out1], 1))
-            return skeleton_output
+            out4_prime = self.deconv1(concat_tensor, c_se_tensor)
+            out3_prime = self.deconv2(torch.cat([out4_prime, out4_ske, out4], 1), c_se_tensor)
+            out2_prime = self.deconv3(torch.cat([out3_prime, out3_ske, out3], 1), c_se_tensor)
+            out1_prime = self.deconv4(torch.cat([out2_prime, out2_ske, out2], 1), c_se_tensor)
 
-        out4_prime = self.deconv1(concat_tensor, c_se_tensor)
-        out3_prime = self.deconv2(torch.cat([out4_prime, out4_ske, out4], 1), c_se_tensor)
-        out2_prime = self.deconv3(torch.cat([out3_prime, out3_ske, out3], 1), c_se_tensor)
-        out1_prime = self.deconv4(torch.cat([out2_prime, out2_ske, out2], 1), c_se_tensor)
-
-        full_output = self.deconv5(torch.cat([out1_prime, out1_ske, out1], 1))
+            full_output = self.deconv5(torch.cat([out1_prime, out1_ske, out1], 1))
 
         if require == 1:
             return full_output
@@ -416,22 +453,26 @@ class Generator(nn.Module):
         else:
             decoder_output = full_output
 
-        if require == 2:
+        if require == 2 or not self.dual_branch:
             return full_output, decoder_output
 
         skeleton_output = self.ske_deconv5(torch.cat([out1_ske, out1], 1))
 
         return full_output, decoder_output, skeleton_output
 
+
 class Discriminator(nn.Module):
-    def __init__(self, input_dim=6, output_dim=1, input_size=256, cv_class_num=115, iv_class_num=370, net_opt=DEFAULT_NET_OPT):
+    def __init__(self, input_dim=6, output_dim=1, input_size=256, cv_class_num=115, iv_class_num=370, net_opt=DEFAULT_NET_OPT, link=False):
         super(Discriminator, self).__init__()
         self.input_dim = input_dim
         self.input_size = input_size
-        # self.cv_class_num = cv_class_num + 23 * 19
-        self.cv_class_num = 23 * 19
         self.iv_class_num = iv_class_num
         self.cardinality = 16
+
+        if link:
+            self.cv_class_num = 23 * 19
+        else:
+            self.cv_class_num = cv_class_num
 
         self.conv1 = nn.Sequential(
             nn.Conv2d(self.input_dim, 32, 3, 1, 1),
@@ -452,12 +493,10 @@ class Discriminator(nn.Module):
             nn.Linear(512, self.iv_class_num),
             nn.Sigmoid()
         )
-
         self.cvt_judge = nn.Sequential(
             nn.Linear(512, self.cv_class_num),
             nn.Sigmoid()
         )
-
         self.adv_judge = nn.Sequential(
             nn.Linear(512, 1),
             nn.Sigmoid()

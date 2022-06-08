@@ -1,8 +1,11 @@
+from cmath import tanh
 from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.data as data
+from torch.utils.data.distributed import DistributedSampler
 
 from PIL import Image
 from torchvision import transforms
@@ -12,10 +15,21 @@ from tqdm import tqdm
 
 from torch.utils.tensorboard import SummaryWriter
 
+import random
+import numpy as np
+
+class RGB2ColorSpace(object):
+    def __call__(self, img):
+        return (img * 2 - 1.)
+
 class TrainDataset(data.Dataset):
-    def __init__(self, datapath, transform=None):
+    def __init__(self, datapath):
         self.datalist = list(datapath.glob("*.png"))
-        self.transform = transform
+        self.transform = transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.ToTensor(),
+            RGB2ColorSpace(),
+        ])
 
     def __len__(self):
         return len(self.datalist)
@@ -26,32 +40,26 @@ class TrainDataset(data.Dataset):
         rgb = img.convert("RGB")
         hsv = img.convert("HSV")
 
-        if self.transform:
-            rgb, hsv = self.transform(rgb), self.transform(hsv)
+        return self.transform(rgb), self.transform(hsv)
 
-        return rgb, hsv
-
-class ResNext_block(nn.Module):
+class ConvNext_block(nn.Module):
     def __init__(self):
-        super(ResNext_block, self).__init__()
+        super(ConvNext_block, self).__init__()
 
-        self.conv1 = nn.Conv2d(64, 32, 1, 1)
-        self.conv2 = nn.Conv2d(32, 32, 3, 1, 1)
-        self.conv3 = nn.Conv2d(32, 64, 1, 1)
-
-        self.relu = nn.ReLU(inplace=True)
+        self.conv1 = nn.Conv2d(64, 64, 3, 1, 1)
+        self.bn = nn.BatchNorm2d(64)
+        self.conv2 = nn.Conv2d(64, 256, 1, 1)
+        self.gelu = nn.GELU()
+        self.conv3 = nn.Conv2d(256, 64, 1, 1)
 
     def forward(self, x):
         y = self.conv1(x)
-        y = self.relu(y)
-
+        y = self.bn(y)
         y = self.conv2(y)
-        y = self.relu(y)
-
+        y = self.gelu(y)
         y = self.conv3(y)
 
         y += x
-        y = self.relu(y)
 
         return y
 
@@ -59,43 +67,17 @@ class Rgb2hsv(nn.Module):
     def __init__(self):
         super(Rgb2hsv, self).__init__()
 
-        self.enc1 = nn.Sequential(
-            nn.Conv2d(3, 16, 3, 2, 1),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(16, 16, 3, 1, 1),
-            nn.LeakyReLU(0.2),
-        )
+        self.conv1 = nn.Conv2d(3, 32, 1, 1)
+        self.conv2 = nn.Conv2d(32, 64, 1, 1)
+        self.conv3 = nn.Conv2d(64, 64, 1, 1)
+        self.conv4 = nn.Conv2d(64, 64, 1, 1)
+        self.conv5 = nn.Conv2d(64, 32, 1, 1)
+        self.conv6 = nn.Conv2d(32, 3, 1, 1)
+        self.tanh = nn.Tanh()
 
-        self.enc2 = nn.Sequential(
-            nn.Conv2d(16, 32, 3, 2, 1),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 32, 3, 1, 1),
-            nn.LeakyReLU(0.2),
-        )
+        self.res_blocks = nn.Sequential(*[ConvNext_block() for _ in range(5)])
 
-        self.enc3 = nn.Sequential(
-            nn.Conv2d(32, 64, 3, 2, 1),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 64, 3, 1, 1),
-            nn.LeakyReLU(0.2),
-        )
-
-        self.res_blocks = nn.Sequential(*[ResNext_block() for _ in range(3)])
-
-        self.dec1 = nn.Sequential(
-            nn.ConvTranspose2d(64+64, 32, 3, stride=2, padding=1, output_padding=1),
-            nn.LeakyReLU(0.2),
-        )
-
-        self.dec2 = nn.Sequential(
-            nn.ConvTranspose2d(32+32, 16, 3, stride=2, padding=1, output_padding=1),
-            nn.LeakyReLU(0.2),
-        )
-
-        self.dec3 = nn.Sequential(
-            nn.ConvTranspose2d(16+16, 3, 3, stride=2, padding=1, output_padding=1),
-            nn.LeakyReLU(0.2),
-        )
+        self.relu = nn.ReLU(inplace=True)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -108,96 +90,113 @@ class Rgb2hsv(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, rgb):
+        hsv = self.conv1(rgb)
+        hsv = self.relu(hsv)
 
-        enc1 = self.enc1(rgb)
-        enc2 = self.enc2(enc1)
-        enc3 = self.enc3(enc2)
+        hsv = self.conv2(hsv)
+        hsv = self.relu(hsv)
 
-        hsv = self.res_blocks(enc3)
+        hsv = self.conv3(hsv)
+        hsv = self.relu(hsv)
 
-        hsv = self.dec1(torch.cat([hsv, enc3], 1))
-        hsv = self.dec2(torch.cat([hsv, enc2], 1))
-        hsv = self.dec3(torch.cat([hsv, enc1], 1))
+        hsv = self.res_blocks(hsv)
+
+        hsv = self.conv4(hsv)
+        hsv = self.relu(hsv)
+
+        hsv = self.conv5(hsv)
+        hsv = self.relu(hsv)
+
+        hsv = self.conv6(hsv)
+        hsv = self.tanh(hsv)
 
         return hsv
 
 
 def get_dataset(args):
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-    ])
-    dataset = TrainDataset(args.dataset, transform)
-    loader = data.DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    dataset = TrainDataset(args.dataset)
+    sampler =  DistributedSampler(dataset, seed=args.seed, drop_last=True)
+    loader = data.DataLoader(dataset, batch_size=args.batch_size, sampler=sampler, num_workers=args.num_workers, pin_memory=True, drop_last=True)
     return loader
 
 def train(args):
     loader = get_dataset(args)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    torch.autograd.set_detect_anomaly(True)
+    device = torch.device("cuda")
 
-    writer = Path('./rgb2hsv2/log')
-    if not writer.exists():
-        writer.mkdir(parents=True)
-    writer = SummaryWriter(str(writer))
+    if args.local_rank == 0:
+        writer = Path('./rgb2hsv2/log')
+        if not writer.exists():
+            writer.mkdir(parents=True)
+        writer = SummaryWriter(str(writer))
 
-    model = nn.DataParallel(Rgb2hsv()).to(device)
-    l1 = nn.L1Loss().to(device)
-    # opti = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
-    opti = torch.optim.SGD(model.parameters(), lr=args.lr)
+    model = Rgb2hsv().to(device)
+    opti = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
+
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
+
+    model.train()
+
+    step = 0
 
     for epoch in range(args.epoch):
-        print(f"epoch: {epoch + 1}")
-
-        model.train()
-
         max_iter = loader.dataset.__len__() // args.batch_size
 
         for iter, (rgb, hsv) in enumerate(tqdm(loader, ncols=80)):
-            if iter >= max_iter:
-                break
-
             rgb, hsv = rgb.to(device), hsv.to(device)
 
             opti.zero_grad()
-            loss = l1(model(rgb), hsv)
+            loss = F.l1_loss(model(rgb), hsv)
             loss.backward()
             opti.step()
 
-            writer.add_scalar("l1", loss.item(), iter+epoch*max_iter)
+            if args.local_rank == 0:
+                writer.add_scalar("l1", loss.item(), step)
+                step += 1
 
-        save(model, epoch)
-
+        if args.local_rank == 0:
+            print(f"epoch: {epoch + 1} done")
+            save(model, epoch + 1)
 
 
 def save(model, epoch):
     p = Path("./rgb2hsv2/")
-
-    if not p.exists():
-        p.mkdir()
+    p.mkdir(exist_ok=True)
 
     torch.save({
-        "rgb2hsv2": model.state_dict(),
+        "rgb2hsv": model.module.state_dict(),
         "epoch": epoch
-    }, str(p / f"rgb2hsv2_{epoch}_epoch.pkl"))
+    }, str(p / f"rgb2hsv2_{epoch}_epoch.pth"))
 
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--dataset", type=str, default="./dataset/rgb_train")
+    parser.add_argument("--local_rank", type=int, default=0)
+
+    parser.add_argument("--dataset", type=Path, default="./dataset/rgb_train")
     parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--num_workers", type=int, default=8)
-    parser.add_argument("--epoch", type=int, default=50)
+    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--epoch", type=int, default=300)
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--beta1", type=float, default=0.5, help="Adam optimizer parameter")
     parser.add_argument("--beta2", type=float, default=0.999, help="Adam optimizer parameter")
+    parser.add_argument("--seed", type=int, default=1, help="Manual random seed")
 
     args = parser.parse_args()
-    args.dataset = Path(args.dataset)
+
+    set_seed(args.seed)
+
+    torch.backends.cudnn.benchmark = True
+    torch.cuda.set_device(args.local_rank)
+    torch.distributed.init_process_group(backend='nccl')
 
     train(args)
 
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 if __name__ == "__main__":
     main()
